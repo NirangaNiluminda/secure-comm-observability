@@ -103,6 +103,26 @@ export async function generateHash(message) {
   return arrayBufferToBase64(hashBuffer);
 }
 
+export function buildSignedEnvelope(fields) {
+  const ordered = {
+    from: fields.from,
+    to: fields.to,
+    message_id: fields.message_id,
+    sent_at: fields.sent_at,
+    iv: fields.iv,
+    ciphertext: fields.ciphertext,
+    hash: fields.hash
+  };
+  return JSON.stringify(ordered);
+}
+
+export function generateMessageId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+}
+
 export function arrayBufferToBase64(buffer) {
   let binary = '';
   const bytes = new Uint8Array(buffer);

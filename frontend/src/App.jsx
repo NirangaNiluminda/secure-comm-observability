@@ -5,7 +5,8 @@ import { motion } from 'framer-motion';
 import {
   generateECDHKeyPair, generateECDSAKeyPair, exportKey,
   importECDHPublicKey, importECDSAPublicKey, deriveSharedKey,
-  encryptMessage, decryptMessage, signMessage, verifySignature, generateHash
+  encryptMessage, decryptMessage, signMessage, verifySignature, generateHash, generateMessageId,
+  buildSignedEnvelope
 } from './crypto';
 
 const SOCKET_SERVER_URL = "http://localhost:5000";
@@ -25,6 +26,13 @@ function App() {
   const [inputMsg, setInputMsg] = useState("");
 
   const [activeSession, setActiveSession] = useState(null); // { targetUser, sharedKey, ecdsaPublicKey }
+  const [errorBanner, setErrorBanner] = useState("");
+
+  const sessionsRef = useRef({});
+  const keysRef = useRef(null);
+  const usernameRef = useRef("");
+  const tokenRef = useRef("");
+  const seenMessageIdsRef = useRef(new Set());
 
   useEffect(() => {
     const newSocket = io(SOCKET_SERVER_URL, { autoConnect: false });
@@ -34,6 +42,18 @@ function App() {
   }, []);
 
   useEffect(() => {
+    keysRef.current = keys;
+  }, [keys]);
+
+  useEffect(() => {
+    usernameRef.current = username;
+  }, [username]);
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
+  useEffect(() => {
     if (!socket) return;
 
     socket.on('connect', () => {
@@ -41,49 +61,98 @@ function App() {
     });
 
     socket.on('user_list', (userList) => {
-      setUsers(userList.filter(u => u !== username));
+      setUsers(userList.filter(u => u !== usernameRef.current));
     });
 
     socket.on('registered', (data) => {
       setToken(data.token);
       setIsRegistered(true);
+      socket.auth = { token: data.token };
+      setErrorBanner("");
+    });
+
+    socket.on('auth_error', (data) => {
+      setErrorBanner(data?.error || 'Authentication failed');
+    });
+
+    socket.on('delivery_error', (data) => {
+      setErrorBanner(data?.error || 'Message delivery failed');
+    });
+
+    socket.on('rate_limit', (data) => {
+      if (data?.retry_after) {
+        setErrorBanner(`${data.error || 'Rate limited'} (retry in ${data.retry_after}s)`);
+      } else {
+        setErrorBanner(data?.error || 'Rate limited');
+      }
     });
 
     socket.on('receive_message', async (data) => {
-      // data: { from, to, ciphertext, iv, signature, hash }
-      if (!keys) return;
-      
+      if (!keysRef.current) return;
+
       try {
-        let session = activeSession;
-        // If we don't have an active session with this user, we need their public key
-        if (!session || session.targetUser !== data.from) {
-            // we should ideally fetch it synchronously or queue the message
-            // for simplicity, let's fetch it via REST or wait for socket
-            // In a real app we'd request the key and wait
-            console.warn("Received message from non-active session. Need their public key.");
-            return;
+        const required = ['from', 'to', 'ciphertext', 'iv', 'signature', 'hash', 'message_id', 'sent_at'];
+        const complete = required.every((field) => data[field]);
+        if (!complete) {
+          throw new Error('Malformed message payload');
         }
 
-        // 1. Decrypt
+        const seenKey = `${data.from}:${data.message_id}`;
+        if (seenMessageIdsRef.current.has(seenKey)) {
+          return;
+        }
+        seenMessageIdsRef.current.add(seenKey);
+
+        const sentAtMs = Date.parse(data.sent_at);
+        if (Number.isNaN(sentAtMs) || Math.abs(Date.now() - sentAtMs) > 5 * 60 * 1000) {
+          throw new Error('Stale or invalid message timestamp');
+        }
+
+        let session = sessionsRef.current[data.from];
+        if (!session) {
+          session = await getOrCreateSession(data.from);
+        }
+
+        const envelope = buildSignedEnvelope({
+          from: data.from,
+          to: data.to,
+          message_id: data.message_id,
+          sent_at: data.sent_at,
+          iv: data.iv,
+          ciphertext: data.ciphertext,
+          hash: data.hash
+        });
+
+        const isSigValid = await verifySignature(session.ecdsaPublicKey, data.signature, envelope);
+        if (!isSigValid) {
+          throw new Error('Signature verification failed');
+        }
+
         const plaintext = await decryptMessage(session.sharedKey, data.iv, data.ciphertext);
-        
-        // 2. Verify Hash
         const computedHash = await generateHash(plaintext);
         const isHashValid = computedHash === data.hash;
 
-        // 3. Verify Signature
-        const isSigValid = await verifySignature(session.ecdsaPublicKey, data.signature, plaintext);
+        if (!isHashValid) {
+          throw new Error('Hash mismatch');
+        }
 
         setMessages(prev => [...prev, {
           id: Date.now(),
           from: data.from,
           to: data.to,
           plaintext: plaintext,
-          status: isHashValid && isSigValid ? 'verified' : 'invalid'
+          status: 'verified'
         }]);
 
       } catch (err) {
-        console.error("Message decryption/verification failed:", err);
+        setMessages(prev => [...prev, {
+          id: Date.now(),
+          from: data.from || 'unknown',
+          to: data.to || usernameRef.current,
+          plaintext: '[Message failed verification]',
+          status: 'invalid'
+        }]);
+        console.error('Message decryption/verification failed:', err);
       }
     });
 
@@ -92,8 +161,47 @@ function App() {
       socket.off('user_list');
       socket.off('registered');
       socket.off('receive_message');
+      socket.off('auth_error');
+      socket.off('delivery_error');
+      socket.off('rate_limit');
     };
-  }, [socket, username, keys, activeSession]);
+  }, [socket]);
+
+  const getOrCreateSession = async (targetUser) => {
+    if (sessionsRef.current[targetUser]) {
+      return sessionsRef.current[targetUser];
+    }
+
+    const tokenValue = tokenRef.current;
+    const keyMaterial = keysRef.current;
+    if (!tokenValue || !keyMaterial) {
+      throw new Error('Cannot create secure session before registration');
+    }
+
+    return await new Promise((resolve, reject) => {
+      socket.emit('get_public_key', { username: targetUser, token: tokenValue }, async (response) => {
+        if (!response || response.error) {
+          reject(new Error(response?.error || 'Public key lookup failed'));
+          return;
+        }
+        try {
+          const theirEcdhPub = await importECDHPublicKey(response.public_key);
+          const theirEcdsaPub = await importECDSAPublicKey(response.sign_public_key);
+          const sharedMasterKey = await deriveSharedKey(keyMaterial.ecdh.privateKey, theirEcdhPub);
+
+          const session = {
+            targetUser,
+            sharedKey: sharedMasterKey,
+            ecdsaPublicKey: theirEcdsaPub
+          };
+          sessionsRef.current[targetUser] = session;
+          resolve(session);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+  };
 
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -116,31 +224,19 @@ function App() {
       });
     } catch (err) {
       console.error("Registration failed:", err);
+      setErrorBanner('Registration failed. Please retry.');
     }
   };
 
-  const startChat = (targetUser) => {
+  const startChat = async (targetUser) => {
     setSelectedUser(targetUser);
-    socket.emit('get_public_key', { username: targetUser }, async (response) => {
-      if (response.error) {
-        console.error(response.error);
-        return;
-      }
-      try {
-        const theirEcdhPub = await importECDHPublicKey(response.public_key);
-        const theirEcdsaPub = await importECDSAPublicKey(response.sign_public_key);
-        
-        const sharedMasterKey = await deriveSharedKey(keys.ecdh.privateKey, theirEcdhPub);
-        
-        setActiveSession({
-          targetUser,
-          sharedKey: sharedMasterKey,
-          ecdsaPublicKey: theirEcdsaPub
-        });
-      } catch (err) {
-        console.error("Session setup failed:", err);
-      }
-    });
+    try {
+      const session = await getOrCreateSession(targetUser);
+      setActiveSession(session);
+    } catch (err) {
+      console.error('Session setup failed:', err);
+      setErrorBanner('Could not establish secure session');
+    }
   };
 
   const sendMessage = async (e) => {
@@ -151,12 +247,21 @@ function App() {
     setInputMsg("");
 
     try {
-      // 1. Hash
       const hash = await generateHash(messageToSend);
-      // 2. Sign
-      const signature = await signMessage(keys.ecdsa.privateKey, messageToSend);
-      // 3. Encrypt
       const { iv, ciphertext } = await encryptMessage(activeSession.sharedKey, messageToSend);
+
+      const messageId = generateMessageId();
+      const sentAt = new Date().toISOString();
+      const envelope = buildSignedEnvelope({
+        from: username,
+        to: selectedUser,
+        message_id: messageId,
+        sent_at: sentAt,
+        iv,
+        ciphertext,
+        hash
+      });
+      const signature = await signMessage(keys.ecdsa.privateKey, envelope);
 
       const payload = {
         from: username,
@@ -164,7 +269,10 @@ function App() {
         ciphertext,
         iv,
         signature,
-        hash
+        hash,
+        message_id: messageId,
+        sent_at: sentAt,
+        token
       };
 
       socket.emit('send_message', payload);
@@ -178,6 +286,7 @@ function App() {
       }]);
     } catch (err) {
       console.error("Send failed:", err);
+      setErrorBanner('Send failed; verify secure session/token state.');
     }
   };
 
@@ -196,6 +305,9 @@ function App() {
           <p className="text-slate-400 mb-6 text-center text-sm">
             End-to-End Encrypted via AES-256-GCM and ECDH with ECDSA Signatures.
           </p>
+          {errorBanner && (
+            <p className="text-red-400 text-sm mb-4">{errorBanner}</p>
+          )}
           <form onSubmit={handleRegister} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1">Username</label>
@@ -278,6 +390,7 @@ function App() {
                   </p>
                 </div>
               </div>
+              {errorBanner && <span className="text-xs text-red-400">{errorBanner}</span>}
             </div>
             
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
