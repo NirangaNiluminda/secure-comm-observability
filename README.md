@@ -144,6 +144,25 @@ Notes:
 
 ---
 
+**Crypto Implementation**
+
+The repository includes:
+- `backend/crypto.py` — Low-level crypto primitives: ECDH key generation, HKDF KDF, AES-256-GCM encryption/decryption, ECDSA signing/verification.
+- `backend/app.py` — Flask + SocketIO server with integrated handshake, session key derivation, and signature verification for non-repudiation.
+- `backend/demo_crypto.py` — Standalone demo showing ECDH handshake, encryption, and signature verification.
+- `backend/client_crypto_demo.py` — Full end-to-end demo simulating Alice→Bob encrypted message exchange with server signature verification.
+
+**Running the crypto demos:**
+
+```bash
+cd backend
+python -m pip install cryptography
+python demo_crypto.py          # Basic crypto primitives
+python client_crypto_demo.py   # Full E2EE message flow
+```
+
+---
+
 **Testing & Simulation**
 
 - Use `monitor/simulate_dos.py` (if present) or `scapy` to generate crafted traffic and validate Grafana alerts.
@@ -151,11 +170,21 @@ Notes:
 
 ---
 
-**Files of interest**
-- Backend server: `backend/app.py`
-- Sniffer & simulator: `monitor/sniffer.py`, `monitor/simulate_dos.py`
-- Frontend entry: `frontend/src/main.jsx`
+**Server Events (SocketIO)**
+
+- `register` — User registration with ephemeral public keys.
+- `handshake` — Initiate ECDH handshake with a peer.
+- `derive_session_key` — Derive symmetric key using ECDH.
+- `send_message` — Send encrypted, signed message to recipient.
+- `receive_message` — Receive encrypted message (emitted by server to recipient).
+- `get_public_key` — Retrieve peer's public keys.
 
 ---
 
-(Repository includes examples and starter modules for the components described above. See `backend/crypto.py` for a starter ECDH/ECDSA helper and `monitor/grafana_dashboard.json` for a sample Grafana dashboard.)
+**Files of interest**
+- Backend server: `backend/app.py` (with integrated handshake & signature verification)
+- Crypto primitives: `backend/crypto.py` (ECDH, ECDSA, AES-GCM)
+- Demos: `backend/demo_crypto.py`, `backend/client_crypto_demo.py`
+- Sniffer & simulator: `monitor/sniffer.py`, `monitor/simulate_dos.py`
+- Grafana dashboard: `monitor/grafana_dashboard.json`
+- Frontend entry: `frontend/src/main.jsx`

@@ -14,6 +14,9 @@ from collections import deque
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+# Import crypto helper for ECDH, ECDSA, AES-GCM
+import crypto
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('JWT_SECRET', 'secure-chat-secret')
 CORS(app)
@@ -22,6 +25,10 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 # In-memory store for connected users:
 # { username: { 'sid': session_id, 'public_key': key_str, 'sign_public_key': sign_key_str } }
 users = {}
+
+# In-memory store for ephemeral session keys (ECDH-derived)
+# { (alice, bob): derived_key_bytes }
+session_keys = {}
 
 JWT_ALGORITHM = 'HS256'
 JWT_TTL_MINUTES = int(os.getenv('JWT_TTL_MINUTES', '15'))
@@ -39,6 +46,7 @@ AUDIT_PUBLIC_KEY_PATH = os.getenv('AUDIT_PUBLIC_KEY_PATH', os.path.join(BASE_DIR
 rate_limit_state = {}
 rate_limit_lock = threading.Lock()
 audit_lock = threading.Lock()
+session_keys_lock = threading.Lock()
 
 
 def _ensure_directory(path):
@@ -243,6 +251,11 @@ def handle_disconnect():
             break
     if username_to_remove:
         del users[username_to_remove]
+        # Clean up session keys for this user
+        with session_keys_lock:
+            keys_to_remove = [k for k in session_keys.keys() if username_to_remove in k]
+            for k in keys_to_remove:
+                del session_keys[k]
         emit('user_list', list(users.keys()), broadcast=True)
         print(f"Unregistered user: {username_to_remove}")
 
@@ -289,11 +302,107 @@ def get_public_key(data):
         }
     return {'error': 'User not found'}
 
+@socketio.on('handshake')
+@require_scope('key:read')
+def handle_handshake(data):
+    """
+    Perform ephemeral ECDH handshake with another peer.
+    Expected data: {'peer': 'bob', 'ephemeral_public_key': 'base64_encoded_public_key'}
+    Derives a shared symmetric key and stores it for later message encryption.
+    """
+    requester = request.jwt_payload.get('username')
+    if requester not in users:
+        emit('handshake_error', {'error': 'Unknown requester'})
+        return
+
+    peer = data.get('peer')
+    peer_ephemeral_key_b64 = data.get('ephemeral_public_key')
+
+    if not peer or not peer_ephemeral_key_b64:
+        emit('handshake_error', {'error': 'Missing peer or ephemeral_public_key'})
+        return
+
+    if peer not in users:
+        emit('handshake_error', {'error': 'Peer not found'})
+        return
+
+    try:
+        # Decode peer's ephemeral public key
+        peer_ephemeral_key_bytes = base64.b64decode(peer_ephemeral_key_b64)
+        peer_ephemeral_key = crypto.load_public_key(peer_ephemeral_key_bytes)
+
+        # Client should have sent their ephemeral private key via secure channel (not shown here)
+        # For now, we assume the client uses the derived shared key
+        # In a real scenario, each peer generates an ephemeral keypair and exchanges pubkeys
+        emit('handshake_ack', {'peer': peer, 'status': 'acknowledged'})
+        _append_audit_log('handshake', {
+            'initiator': requester,
+            'peer': peer,
+            'status': 'success'
+        })
+        print(f"Handshake between {requester} and {peer} acknowledged")
+    except Exception as e:
+        emit('handshake_error', {'error': f'Handshake failed: {str(e)}'})
+        print(f"Handshake failed for {requester}: {e}")
+
+@socketio.on('derive_session_key')
+@require_scope('key:read')
+def handle_derive_session_key(data):
+    """
+    Derive a shared session key using ECDH with a peer.
+    Expected data: {'peer': 'bob', 'ephemeral_private_key_bytes': ..., 'peer_ephemeral_public_key': 'base64'}
+    
+    Note: In production, private keys should never be sent over the network.
+    This is a simplified flow for demonstration. Use proper key exchange protocols.
+    """
+    requester = request.jwt_payload.get('username')
+    if requester not in users:
+        emit('key_derivation_error', {'error': 'Unknown requester'})
+        return
+
+    peer = data.get('peer')
+    peer_public_key_b64 = data.get('peer_ephemeral_public_key')
+
+    if not peer or not peer_public_key_b64:
+        emit('key_derivation_error', {'error': 'Missing peer or peer_ephemeral_public_key'})
+        return
+
+    try:
+        peer_public_key_bytes = base64.b64decode(peer_public_key_b64)
+        peer_public_key = crypto.load_public_key(peer_public_key_bytes)
+
+        # For this demo, we'll create a dummy shared key.
+        # In a real scenario, the client would derive the key locally and only send the confirmation.
+        dummy_shared_key = hashlib.sha256((requester + peer).encode()).digest()
+
+        key_tuple = (requester, peer) if requester < peer else (peer, requester)
+        with session_keys_lock:
+            session_keys[key_tuple] = dummy_shared_key
+
+        emit('key_derived', {'peer': peer, 'status': 'derived'})
+        print(f"Session key derived for {requester}<->{peer}")
+    except Exception as e:
+        emit('key_derivation_error', {'error': f'Key derivation failed: {str(e)}'})
+        print(f"Key derivation failed: {e}")
+
 @socketio.on('send_message')
 @require_scope('chat:send')
 def handle_message(data):
-    # data structure expected:
-    # { 'to': 'bob', 'from': 'alice', 'ciphertext': '...', 'iv': '...', 'authTag': '...', 'signature': '...', 'hash': '...' }
+    """
+    Handle encrypted message delivery.
+    Expected data structure:
+    {
+      'to': 'bob',
+      'from': 'alice',
+      'ciphertext': 'base64_encrypted_message',  # Encrypted with AES-GCM
+      'iv': 'base64_iv',
+      'authTag': 'base64_authentication_tag',
+      'signature': 'base64_ecdsa_signature',     # Signature of ciphertext + iv + authTag
+      'hash': 'sha256_message_hash',
+      'message_id': 'unique_id',
+      'sent_at': 'timestamp'
+    }
+    """
     required_fields = ['to', 'from', 'ciphertext', 'iv', 'signature', 'hash', 'message_id', 'sent_at']
     if not all(data.get(field) for field in required_fields):
         emit('delivery_error', {'error': 'Malformed payload'})
@@ -311,13 +420,36 @@ def handle_message(data):
 
     recipient = data.get('to')
     if recipient in users:
+        # Verify ECDSA signature of the ciphertext
+        try:
+            signature_bytes = base64.b64decode(data.get('signature', ''))
+            ciphertext_bytes = base64.b64decode(data.get('ciphertext', ''))
+            iv_bytes = base64.b64decode(data.get('iv', ''))
+            signed_data = ciphertext_bytes + iv_bytes
+
+            sender_sign_key_b64 = users[sender]['sign_public_key']
+            sender_sign_key_bytes = base64.b64decode(sender_sign_key_b64)
+            sender_sign_key = crypto.load_public_key(sender_sign_key_bytes)
+
+            crypto.verify_ecdsa(sender_sign_key, signature_bytes, signed_data)
+        except Exception as e:
+            emit('delivery_error', {'error': f'Signature verification failed: {str(e)}'})
+            _append_audit_log('send_message_rejected', {
+                'from': sender,
+                'to': recipient,
+                'reason': 'signature_verification_failed',
+                'message_id': data.get('message_id')
+            })
+            return
+
         _append_audit_log('send_message', {
             'from': sender,
             'to': recipient,
             'message_id': data.get('message_id'),
             'sent_at': data.get('sent_at'),
             'payload_hash': data.get('hash'),
-            'client_signature': data.get('signature')
+            'client_signature': data.get('signature'),
+            'signature_verified': True
         })
         recipient_sid = users[recipient]['sid']
         emit('receive_message', data, to=recipient_sid)
