@@ -158,9 +158,4 @@ Notes:
 
 ---
 
-If you want, I can now:
-- Add a sample Grafana dashboard JSON.
-- Add example scripts for key generation and a minimal end-to-end encrypted message exchange.
-- Implement a starter ECDH/ECDSA helper module in `backend/`.
-
-Tell me which next step you'd like me to take.
+(Repository includes examples and starter modules for the components described above. See `backend/crypto.py` for a starter ECDH/ECDSA helper and `monitor/grafana_dashboard.json` for a sample Grafana dashboard.)

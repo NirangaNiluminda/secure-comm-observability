@@ -1,0 +1,31 @@
+{
+  "title": "Secure Traffic Overview",
+  "schemaVersion": 27,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "heatmap",
+      "title": "Packet Size Distribution",
+      "datasource": "InfluxDB",
+      "targets": [
+        {
+          "query": "from(bucket: \"your-bucket\") |> range($range) |> filter(fn: (r) => r._measurement == \"packets\" and r._field == \"packet_size\")"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "heatmap",
+      "title": "SYN/ACK Ratio",
+      "datasource": "InfluxDB",
+      "targets": [
+        {
+          "query": "from(bucket: \"your-bucket\") |> range($range) |> filter(fn: (r) => r._measurement == \"tcp_flags\") |> pivot(rowKey:[\"_time\"], columnKey:[\"_field\"], valueColumn:\"_value\") |> map(fn:(r) => ({ r with syn_ack_ratio: if r.ack == 0 then r.syn else r.syn / r.ack }))"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    }
+  ]
+}
