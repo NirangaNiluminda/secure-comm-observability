@@ -188,3 +188,9 @@ python client_crypto_demo.py   # Full E2EE message flow
 - Sniffer & simulator: `monitor/sniffer.py`, `monitor/simulate_dos.py`
 - Grafana dashboard: `monitor/grafana_dashboard.json`
 - Frontend entry: `frontend/src/main.jsx`
+
+---
+
+**License**
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) file for details.
