@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SecureComm — System & Attack Diagrams</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg:        #0a0f1e;
+      --surface:   #0f172a;
+      --card:      #1e293b;
+      --border:    #334155;
+      --text:      #e2e8f0;
+      --muted:     #94a3b8;
+      --emerald:   #10b981;
+      --red:       #ef4444;
+      --blue:      #3b82f6;
+      --yellow:    #f59e0b;
+      --purple:    #8b5cf6;
+      --orange:    #f97316;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────────── */
+    nav {
+      width: 270px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 20px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    nav .brand {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px 16px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 8px;
+    }
+    nav .brand .logo {
+      width: 36px; height: 36px;
+      background: rgba(16,185,129,0.15);
+      border: 1px solid rgba(16,185,129,0.3);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    nav .brand h1 { font-size: 13px; font-weight: 700; color: #fff; }
+    nav .brand p  { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+    nav .group-label {
+      font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; color: var(--muted);
+      padding: 10px 10px 4px;
+    }
+
+    nav a {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 12px;
+      color: #94a3b8;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+    }
+    nav a:hover { background: rgba(255,255,255,0.05); color: #fff; }
+    nav a.active { background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.25); color: var(--emerald); }
+    nav a .dot {
+      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    }
+
+    /* ── Main content ────────────────────────────────────────── */
+    main {
+      flex: 1;
+      padding: 32px 40px;
+      max-width: 1100px;
+      overflow-x: hidden;
+    }
+
+    .page-header {
+      margin-bottom: 36px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .page-header h1 {
+      font-size: 24px; font-weight: 800; color: #fff;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .page-header p { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+    /* ── Section cards ───────────────────────────────────────── */
+    section {
+      margin-bottom: 48px;
+      scroll-margin-top: 20px;
+    }
+
+    .section-header {
+      display: flex; align-items: flex-start; gap: 14px;
+      margin-bottom: 16px;
+    }
+    .section-icon {
+      width: 40px; height: 40px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; flex-shrink: 0;
+    }
+    .section-header h2 { font-size: 18px; font-weight: 700; color: #fff; }
+    .section-header p  { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+
+    .badge {
+      display: inline-flex; align-items: center;
+      padding: 2px 8px; border-radius: 4px;
+      font-size: 10px; font-weight: 700;
+      font-family: monospace; letter-spacing: 0.05em;
+    }
+
+    .diagram-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      overflow-x: auto;
+    }
+
+    .diagram-card pre.mermaid {
+      display: flex;
+      justify-content: center;
+    }
+
+    /* Key points below each diagram */
+    .key-points {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 10px;
+    }
+    .kp {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 11px;
+    }
+    .kp .label {
+      font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 4px;
+    }
+    .kp p { color: var(--muted); line-height: 1.5; }
+
+    /* Attack-type colors */
+    .type-arch  { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.25); }
+    .type-auth  { background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.2); }
+    .type-e2ee  { background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.2); }
+    .type-ecdh  { background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.2); }
+    .type-atk   { background: rgba(239,68,68,0.07);  border-color: rgba(239,68,68,0.2); }
+    .type-audit { background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.2); }
+    .type-stride{ background: rgba(139,92,246,0.08); border-color: rgba(139,92,246,0.2); }
+
+    .icon-arch  { background: rgba(59,130,246,0.15); }
+    .icon-auth  { background: rgba(16,185,129,0.15); }
+    .icon-e2ee  { background: rgba(16,185,129,0.15); }
+    .icon-ecdh  { background: rgba(99,102,241,0.15); }
+    .icon-atk   { background: rgba(239,68,68,0.15); }
+    .icon-audit { background: rgba(245,158,11,0.15); }
+    .icon-stride{ background: rgba(139,92,246,0.15); }
+
+    /* STRIDE table */
+    .stride-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .stride-table th {
+      text-align: left; padding: 10px 14px;
+      background: rgba(255,255,255,0.04);
+      border-bottom: 1px solid var(--border);
+      color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+    }
+    .stride-table td { padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .stride-table tr:last-child td { border-bottom: none; }
+    .stride-table .letter {
+      width: 36px; height: 36px; border-radius: 9px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 14px; font-family: monospace;
+    }
+
+    /* Defense grid */
+    .defense-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 12px;
+    }
+    .def-card {
+      background: rgba(16,185,129,0.05);
+      border: 1px solid rgba(16,185,129,0.2);
+      border-radius: 12px; padding: 14px 16px;
+    }
+    .def-card h4 { font-size: 12px; font-weight: 700; color: var(--emerald); margin-bottom: 4px; }
+    .def-card p  { font-size: 11px; color: var(--muted); line-height: 1.5; }
+    .def-card code {
+      display: block; margin-top: 6px;
+      font-size: 10px; color: #7dd3fc;
+      background: rgba(0,0,0,0.3);
+      border-radius: 6px; padding: 6px 8px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Divider */
+    hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════ SIDEBAR ═══════════════════════════════ -->
+<nav>
+  <div class="brand">
+    <div class="logo">🔐</div>
+    <div>
+      <h1>SecureComm</h1>
+      <p>System Diagrams</p>
+    </div>
+  </div>
+
+  <div class="group-label">Architecture</div>
+  <a href="#arch">    <div class="dot" style="background:#3b82f6"></div> System Architecture</a>
+
+  <div class="group-label">Normal Flows</div>
+  <a href="#auth">    <div class="dot" style="background:#10b981"></div> Authentication Flow</a>
+  <a href="#ecdh">    <div class="dot" style="background:#6366f1"></div> ECDH Key Exchange</a>
+  <a href="#e2ee">    <div class="dot" style="background:#10b981"></div> Secure Message Flow</a>
+
+  <div class="group-label">Attack Simulations</div>
+  <a href="#replay">  <div class="dot" style="background:#ef4444"></div> Attack 1 · Replay</a>
+  <a href="#tamper">  <div class="dot" style="background:#ef4444"></div> Attack 2 · Tamper</a>
+  <a href="#brute">   <div class="dot" style="background:#ef4444"></div> Attack 3 · Brute Force</a>
+  <a href="#jwt">     <div class="dot" style="background:#ef4444"></div> Attack 4 · JWT Forgery</a>
+  <a href="#mitm">    <div class="dot" style="background:#ef4444"></div> Attack 5 · MITM</a>
+  <a href="#dos">     <div class="dot" style="background:#ef4444"></div> Attack 6 · DoS Flood</a>
+
+  <div class="group-label">Evidence & Coverage</div>
+  <a href="#audit">   <div class="dot" style="background:#f59e0b"></div> Audit Log Chain</a>
+  <a href="#defenses"><div class="dot" style="background:#10b981"></div> All 8 Defense Layers</a>
+  <a href="#stride">  <div class="dot" style="background:#8b5cf6"></div> STRIDE Threat Model</a>
+</nav>
+
+<!-- ════════════════════════════ MAIN CONTENT ════════════════════════════ -->
+<main>
+
+  <div class="page-header">
+    <h1>🔐 SecureComm — System & Security Diagrams</h1>
+    <p>Visual walkthrough of the architecture, cryptographic flows, all 6 attack simulations, and how each defense mechanism responds. Open in any modern browser — diagrams render automatically.</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       1. SYSTEM ARCHITECTURE
+  ══════════════════════════════════════════════════════════ -->
+  <section id="arch">
+    <div class="section-header">
+      <div class="section-icon icon-arch">🏗️</div>
+      <div>
+        <h2>System Architecture</h2>
+        <p>All Docker containers, services, and data paths. The Nginx reverse-proxy sits in front — it routes /api/* to Flask and /socket.io/* to SocketIO. The Scapy sniffer runs on the host OS with NET_RAW capability and writes to InfluxDB.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-arch">
+      <pre class="mermaid">
+graph TB
+    subgraph BROWSER["🌐  Browser  (React SPA + Web Crypto API)"]
+        UI["Chat + Security Dashboard"]
+        WC["Web Crypto API\nECDH · AES-256-GCM · ECDSA · SHA-256"]
+    end
+
+    subgraph DOCKER["🐳  Docker Compose — securechat-net"]
+        subgraph FE["  frontend  :80  "]
+            NGINX["Nginx Reverse Proxy\nserves React SPA\nproxies /api/ and /socket.io/"]
+        end
+
+        subgraph BE["  backend  :5000  "]
+            FLASK["Flask REST API\n/api/register  /api/login\n/api/flood-test  /api/audit\n/api/attack/simulate"]
+            SOCK["Flask-SocketIO\nregister · send_message\nget_public_key · handshake"]
+            RATE["Rate Limiter\nSliding-window deque\n15 logins · 120 msgs · 40 connects / 60s"]
+            CRYPTOMOD["crypto.py\nECDH P-256 · ECDSA P-256\nAES-256-GCM · HKDF-SHA256"]
+            AUDITMOD["Audit Logger\nSHA-256 hash chain\nECDSA-signed entries"]
+        end
+
+        subgraph STORE["  Persistent Storage  "]
+            SQLITE[("SQLite  users.db\n─────────────\nusers table\nsecurity_events table")]
+            NDJSON[/"audit_log.ndjson\nHash-chained · append-only"\]
+        end
+
+        subgraph MON["  Monitoring Stack  "]
+            INFLUX[("InfluxDB  :8086\nnetwork_metrics bucket\nnetwork_traffic measurement\nnetwork_anomaly measurement")]
+            GRAFANA["📊  Grafana  :3000\nPacket Size Distribution\nSYN/ACK Ratio — DoS Detection\nDoS Alerts panel"]
+        end
+    end
+
+    subgraph HOST["🐧  Host OS  (Linux)"]
+        SCAPY["Scapy Packet Sniffer\nNET_RAW · NET_ADMIN\nhost network mode\nfilter: tcp port 80"]
+    end
+
+    BROWSER -->|"HTTP :80"| NGINX
+    NGINX -->|"/api/* proxy_pass"| FLASK
+    NGINX -->|"/socket.io/* proxy_pass"| SOCK
+
+    FLASK --> RATE
+    FLASK --> CRYPTOMOD
+    FLASK --> AUDITMOD
+    FLASK --> SQLITE
+    SOCK --> RATE
+    SOCK --> CRYPTOMOD
+    SOCK --> AUDITMOD
+    AUDITMOD --> NDJSON
+    AUDITMOD --> SQLITE
+
+    SCAPY -->|"Flux write\nPOINT every packet"| INFLUX
+    INFLUX --> GRAFANA
+    HOST -.->|"captures live TCP traffic"| SCAPY
+
+    style BROWSER fill:#0f172a,stroke:#334155,color:#e2e8f0
+    style DOCKER  fill:#0a0f1e,stroke:#1e3a5f,color:#e2e8f0
+    style FE      fill:#0f2744,stroke:#1d4ed8,color:#e2e8f0
+    style BE      fill:#0f2744,stroke:#1d4ed8,color:#e2e8f0
+    style STORE   fill:#1a1a0f,stroke:#854d0e,color:#e2e8f0
+    style MON     fill:#0f1a2a,stroke:#1d4ed8,color:#e2e8f0
+    style HOST    fill:#1a0f0f,stroke:#7f1d1d,color:#e2e8f0
+    style SCAPY   fill:#1a0f0f,stroke:#dc2626,color:#fca5a5
+      </pre>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       2. AUTHENTICATION FLOW
+  ══════════════════════════════════════════════════════════ -->
+  <section id="auth">
+    <div class="section-header">
+      <div class="section-icon icon-auth">🔑</div>
+      <div>
+        <h2>Authentication Flow — Register &amp; Login</h2>
+        <p>How user credentials are created and verified. Passwords are NEVER stored in plain text — only a bcrypt hash (60 bytes, salt embedded). JWT tokens are stateless and scoped.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-auth">
+      <pre class="mermaid">
+sequenceDiagram
+    participant BR as Browser
+    participant API as Flask  /api
+    participant DB as SQLite  users.db
+    participant JWT as JWT  HS256
+
+    rect rgb(15, 40, 80)
+        Note over BR,DB: ── REGISTRATION ──
+        BR->>API: POST /api/register  {username, password}
+        API->>API: Validate: len ≥ 3, pw len ≥ 6
+        API->>API: hashed = bcrypt.hashpw(pw, gensalt(rounds=12))
+        Note over API: ~150ms intentionally — brute force defence
+        API->>DB: INSERT INTO users (username, hashed_password)
+        DB-->>API: OK  (IntegrityError if username taken)
+        API->>API: _append_audit_log("account_created")
+        API-->>BR: 201 Created  {success: true}
+    end
+
+    rect rgb(10, 50, 30)
+        Note over BR,JWT: ── LOGIN ──
+        BR->>API: POST /api/login  {username, password}
+        API->>API: _check_rate_limit("login", ip, 15)
+        Note over API: ⚡ Rate limit: 15 attempts per 60s per IP
+        API->>DB: SELECT * FROM users WHERE username = ?
+        alt user not found
+            API->>API: bcrypt.checkpw(dummy, dummy_hash)
+            Note over API: Dummy check: same timing as real check
+            Note over API: Prevents user enumeration attack
+            API-->>BR: 401 Invalid username or password
+        else user exists
+            API->>API: bcrypt.checkpw(password, stored_hash)
+            alt password wrong
+                API->>API: _append_audit_log("login_failed")
+                API-->>BR: 401 Invalid username or password
+            else password correct
+                API->>JWT: jwt.encode({username, scopes, exp=+60min})
+                JWT-->>API: signed HS256 token
+                API->>API: _append_audit_log("login_success")
+                API-->>BR: 200  {token, username}
+                Note over BR: Token stored in React state (memory only)
+                Note over BR: Private key NEVER leaves browser
+            end
+        end
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">bcrypt Work Factor</div>
+        <p>Cost factor 12 makes each hash ~100–150ms. Guessing 1 million passwords takes ~28 hours per CPU core.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Timing Attack Prevention</div>
+        <p>Even for non-existent users, a dummy bcrypt check runs — so attacker cannot tell if a username exists by timing the response.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">JWT Scopes</div>
+        <p>Token carries scopes: <code>chat:send · chat:read · key:read</code>. Each endpoint checks the required scope before acting.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Rate Limiting</div>
+        <p>15 login attempts per 60-second window per IP. The 16th attempt returns HTTP 429 Too Many Requests.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       3. ECDH KEY EXCHANGE
+  ══════════════════════════════════════════════════════════ -->
+  <section id="ecdh">
+    <div class="section-header">
+      <div class="section-icon icon-ecdh">🤝</div>
+      <div>
+        <h2>ECDH P-256 Key Exchange — Perfect Forward Secrecy</h2>
+        <p>Both Alice and Bob generate fresh ephemeral EC key pairs every session (every page load). The shared AES key is DERIVED — never transmitted. This is called Perfect Forward Secrecy (PFS): even if a key is stolen later, past messages cannot be decrypted.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-ecdh">
+      <pre class="mermaid">
+sequenceDiagram
+    participant A as Alice  (Browser)
+    participant S as Server  (users{})
+    participant B as Bob  (Browser)
+
+    rect rgb(20, 30, 80)
+        Note over A,S: ── On Login: Alice registers her public keys ──
+        A->>A: ecdhA  = generateECDHKeyPair()   P-256
+        A->>A: ecdsaA = generateECDSAKeyPair()  P-256
+        Note over A: Private keys stay in browser memory (never sent)
+        A->>S: socket.register(jwt, ecdhA.pub, ecdsaA.pub)
+        S->>S: users["alice"] = { ecdhA.pub, ecdsaA.pub, sid }
+    end
+
+    rect rgb(20, 30, 80)
+        Note over B,S: ── On Login: Bob registers his public keys ──
+        B->>B: ecdhB  = generateECDHKeyPair()   P-256
+        B->>B: ecdsaB = generateECDSAKeyPair()  P-256
+        B->>S: socket.register(jwt, ecdhB.pub, ecdsaB.pub)
+        S->>S: users["bob"] = { ecdhB.pub, ecdsaB.pub, sid }
+    end
+
+    rect rgb(10, 50, 30)
+        Note over A,B: ── Key Derivation: Alice opens chat with Bob ──
+        A->>S: get_public_key("Bob")  [requires JWT scope: key:read]
+        S-->>A: { ecdhB.pub, ecdsaB.pub }
+
+        A->>A: shared_secret = ECDH(ecdhA.priv, ecdhB.pub)
+        A->>A: aes_key = HKDF-SHA256(shared_secret, 32 bytes)
+        Note over A: aes_key is the AES-256-GCM encryption key
+
+        Note over B: When Bob opens chat with Alice...
+        B->>S: get_public_key("Alice")
+        S-->>B: { ecdhA.pub, ecdsaA.pub }
+
+        B->>B: shared_secret = ECDH(ecdhB.priv, ecdhA.pub)
+        B->>B: aes_key = HKDF-SHA256(shared_secret, 32 bytes)
+        Note over A,B: ✓ Alice and Bob hold IDENTICAL aes_key
+        Note over A,B: ✓ Key was NEVER transmitted — PFS achieved
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--purple)">Why ECDH Works</div>
+        <p>ECDH(Alice_priv, Bob_pub) = ECDH(Bob_priv, Alice_pub) — this is the mathematical property of elliptic curves. Both sides get the same point on the curve, which is then hashed into an AES key.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--purple)">Perfect Forward Secrecy</div>
+        <p>Ephemeral keys (new keypair each login) mean: if an attacker records encrypted traffic today and steals a key tomorrow, they CANNOT decrypt past sessions.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">HKDF-SHA256</div>
+        <p>The raw ECDH shared secret is passed through HKDF (HMAC-based Key Derivation Function) to produce a uniformly random 256-bit AES key, with domain separation info string.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">P-256 Key Size</div>
+        <p>256-bit elliptic curve key provides ~128-bit security strength — equivalent to 3072-bit RSA, but with much smaller keys and faster computation.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       4. SECURE MESSAGE FLOW
+  ══════════════════════════════════════════════════════════ -->
+  <section id="e2ee">
+    <div class="section-header">
+      <div class="section-icon icon-e2ee">💬</div>
+      <div>
+        <h2>End-to-End Encrypted Message Flow</h2>
+        <p>Complete lifecycle of a single message. The server performs 4 security checks before forwarding but <strong>never sees the plaintext</strong>. The receiver runs 5 independent verifications before displaying the message.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-e2ee">
+      <pre class="mermaid">
+sequenceDiagram
+    participant A as Alice  (Browser)
+    participant S as Server  (4 checks)
+    participant B as Bob  (Browser)
+
+    Note over A: ── Message Preparation (all crypto in browser) ──
+    A->>A: ① hash = SHA-256(plaintext)
+    A->>A: ② iv   = crypto.getRandomValues(12 bytes)
+    A->>A: ③ ciphertext = AES-256-GCM(aes_key, iv, plaintext)
+    A->>A: ④ msgId = crypto.randomUUID()
+    A->>A: ⑤ envelope = JSON{from,to,msgId,sentAt,iv,ciphertext,hash}
+    A->>A: ⑥ signature = ECDSA-sign(ecdsaA.priv, envelope)
+
+    A->>S: socket.send_message {from,to,ciphertext,iv,signature,hash,msgId,sentAt,token}
+
+    rect rgb(20,40,20)
+        Note over S: ── Server: 4 Security Checks (NO decryption) ──
+        S->>S: ① JWT verify scope "chat:send"
+        S->>S: ② rate_limit("send", alice, limit=120/60s)
+        S->>S: ③ msgKey = "alice:msgId"  →  msgKey ∉ seen_message_ids
+        Note over S: Replay attack blocked if msgId already seen
+        S->>S: ④ ECDSA verify(alice_registered_ecdsa_pub, signature, envelope)
+        Note over S: InvalidSignature raised if tampered or MITM
+        S->>S: seen_message_ids.add(msgKey)
+        S->>S: _append_audit_log("message_sent", {from,to,msgId,hash})
+        Note over S: Server logs ONLY metadata — never the plaintext or ciphertext
+        S-->>B: socket.receive_message {ciphertext,iv,signature,hash,msgId,sentAt}
+    end
+
+    rect rgb(20,30,60)
+        Note over B: ── Bob: 5 Independent Verifications ──
+        B->>B: ① seenIds.has("alice:msgId") → false → add to set
+        Note over B: Client-side replay protection (dedup set)
+        B->>B: ② |Date.now() - sentAt| < 5 minutes
+        Note over B: Stale message rejection (timestamp window)
+        B->>B: ③ ECDSA verify(aliceEcdsaPub, signature, envelope)
+        Note over B: InvalidSignature if message tampered in transit
+        B->>B: ④ plaintext = AES-256-GCM-decrypt(aes_key, iv, ciphertext)
+        Note over B: InvalidTag exception if any ciphertext byte changed
+        B->>B: ⑤ SHA-256(plaintext) === hash
+        Note over B: Final integrity check on decrypted content
+        B->>B: ✓ Display message with "Verified" badge
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">True E2EE</div>
+        <p>The server receives only encrypted blobs {ciphertext, iv, signature, hash}. It cannot decrypt the content. Even database or server compromise reveals nothing about message content.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Multi-Layer Integrity</div>
+        <p>Three independent integrity checks: AES-GCM auth tag (ciphertext level), ECDSA signature (envelope level), SHA-256 hash (plaintext level). All three must pass.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">Signed Envelope</div>
+        <p>The ECDSA signature covers ALL fields: from, to, msgId, sentAt, iv, ciphertext, hash. Changing any single field invalidates the signature.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Non-Repudiation</div>
+        <p>Alice's ECDSA private key signs every message. Alice cannot later deny sending it. The audit log records the signature was verified, creating a cryptographic proof of authorship.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       5. ATTACK 1 — REPLAY
+  ══════════════════════════════════════════════════════════ -->
+  <section id="replay">
+    <div class="section-header">
+      <div class="section-icon icon-atk">🔁</div>
+      <div>
+        <h2>Attack 1 — Replay Attack</h2>
+        <p><span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">STRIDE: Spoofing / Repudiation</span>&nbsp; Attacker captures a legitimate encrypted message and re-sends the exact same packet later, hoping the server processes it twice (e.g., double payment, duplicate command).</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-atk">
+      <pre class="mermaid">
+sequenceDiagram
+    participant A as Alice  (Sender)
+    participant ATK as Attacker  (MITM)
+    participant S as Server
+    participant B as Bob  (Receiver)
+
+    Note over A,B: ── PHASE 1: Legitimate first delivery ──
+    A->>ATK: send_message {msgId:"abc-123", ciphertext:"...", sig:"..."}
+    Note over ATK: Attacker intercepts and RECORDS the packet
+    ATK->>S: (forwards) send_message {msgId:"abc-123", ...}
+    S->>S: ✓ "alice:abc-123" not in seen_message_ids → ALLOW
+    S->>S: seen_message_ids.add("alice:abc-123")
+    S-->>B: receive_message {msgId:"abc-123", ...}
+    B->>B: ① seenIds.add("alice:abc-123")
+    B->>B: ② Timestamp OK — recent message
+    B->>B: ③ ECDSA verify → valid
+    B->>B: ④ AES-GCM decrypt → success
+    B->>B: ✓ Displays message
+
+    Note over ATK: ── PHASE 2: Replay Attack (same packet re-sent) ──
+    ATK->>S: REPLAY send_message {msgId:"abc-123", ...}
+    Note over S: 🛡️ SERVER DEFENSE — seen_message_ids check
+    S->>S: "alice:abc-123" IN seen_message_ids → BLOCKED
+    S->>S: _append_audit_log("attack_replay_blocked")
+    S-->>ATK: delivery_error "Replay attack detected: duplicate message_id"
+
+    Note over B: 🛡️ CLIENT DEFENSE (backup — even if server missed it)
+    Note over B: seenIds.has("alice:abc-123") → true → silently dropped
+    Note over B: Also: timestamp 400s old → > 5 min window → rejected
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--red)">Attack Vector</div>
+        <p>Record any valid WebSocket packet. Re-transmit it later with zero modification. No crypto knowledge required — the attacker is just resending a valid captured packet.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Primary Defense</div>
+        <p>Server-side <code>seen_message_ids</code> set tracks every (from, msgId) pair. Duplicates are blocked at the server before reaching the recipient.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Secondary Defense</div>
+        <p>Client-side <code>seenIdsRef</code> Set provides a second deduplication layer. Even if the server missed it, the browser would silently discard the duplicate.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Tertiary Defense</div>
+        <p>5-minute timestamp window: <code>|Date.now() - sent_at| &lt; 300,000 ms</code>. Messages older than 5 minutes are automatically rejected, regardless of msgId.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       6. ATTACK 2 — TAMPER
+  ══════════════════════════════════════════════════════════ -->
+  <section id="tamper">
+    <div class="section-header">
+      <div class="section-icon icon-atk">🔨</div>
+      <div>
+        <h2>Attack 2 — Ciphertext Tampering</h2>
+        <p><span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">STRIDE: Tampering / Information Disclosure</span>&nbsp; A Man-in-the-Middle flips bits in the encrypted message hoping to alter what Bob reads, or to confuse the decryption process.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-atk">
+      <pre class="mermaid">
+sequenceDiagram
+    participant A as Alice  (Browser)
+    participant ATK as Attacker  (MITM)
+    participant S as Server
+    participant B as Bob  (Browser)
+
+    Note over A: ── Alice encrypts and signs ──
+    A->>A: ciphertext = AES-256-GCM(aes_key, iv, "Hello Bob!")
+    A->>A: envelope = JSON{..., iv, ciphertext, hash}
+    A->>A: signature = ECDSA-sign(alice_priv, envelope)
+    A->>ATK: send_message {ciphertext, iv, signature, hash}
+
+    rect rgb(80,20,20)
+        Note over ATK: 🔴 ATTACK — flip one byte of ciphertext
+        ATK->>ATK: corrupted_ct = ciphertext[0] XOR 0xFF
+        Note over ATK: Attacker does NOT have Alice's ECDSA private key
+        Note over ATK: Cannot re-sign the modified envelope
+        ATK->>S: send_message {corrupted_ct, iv, signature, hash}
+    end
+
+    rect rgb(20,60,20)
+        Note over S: 🛡️ DEFENSE LAYER 1 — ECDSA Signature Verification
+        S->>S: rebuild envelope with corrupted_ct
+        S->>S: ECDSA verify(alice_pub, signature, envelope_with_corrupted_ct)
+        S->>S: ✗ RAISES InvalidSignature!
+        Note over S: Original sig covers original ct, not corrupted ct
+        S->>S: _append_audit_log("message_rejected", reason="sig_fail")
+        S-->>ATK: delivery_error "Signature verification failed"
+    end
+
+    Note over B: 🛡️ DEFENSE LAYER 2 (client — if message somehow forwarded)
+    B->>B: AES-256-GCM decrypt(aes_key, iv, corrupted_ct)
+    B->>B: ✗ RAISES InvalidTag! (GCM auth tag mismatch)
+    B->>B: Show: ⚠ Verification failed: AES-GCM integrity check failed
+
+    Note over B: 🛡️ DEFENSE LAYER 3 — SHA-256 Hash
+    B->>B: SHA-256(decrypted_plaintext) ≠ hash → tamper confirmed
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--red)">Why It Fails (Layer 1)</div>
+        <p>The ECDSA signature covers the ciphertext as a field in the envelope. Changing the ciphertext = changing the signed data = signature mismatch. Attacker cannot forge a new signature without Alice's private key.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--red)">Why It Fails (Layer 2)</div>
+        <p>AES-256-GCM is an AEAD cipher. It appends a 16-byte authentication tag that binds the key, IV, and ciphertext together. Any modification to ciphertext bytes invalidates this tag — <code>InvalidTag</code> is raised.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Chat UI Demo</div>
+        <p>Enable "Tamper Attack Demo" toggle → send a message → Alice's browser corrupts ciphertext locally → Bob sees ⚠ in red. This tests the AES-GCM layer since the tampered ct is signed (simulating a self-tampering scenario).</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Real Simulator</div>
+        <p>The attack simulator runs real Python code: <code>decrypt_aes_gcm(key, corrupted)</code> → raises <code>InvalidTag</code>. <code>verify_ecdsa(alice_pub, sig_orig, corrupted)</code> → raises <code>InvalidSignature</code>. Both exceptions captured and shown.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       7. ATTACK 3 — BRUTE FORCE LOGIN
+  ══════════════════════════════════════════════════════════ -->
+  <section id="brute">
+    <div class="section-header">
+      <div class="section-icon icon-atk">🔑</div>
+      <div>
+        <h2>Attack 3 — Brute Force Login</h2>
+        <p><span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">STRIDE: Elevation of Privilege</span>&nbsp; The simulator makes 16 real <code>POST /api/login</code> HTTP requests from the browser with wrong passwords. Attempts 1–15 receive 401. Attempt 16 receives 429 Too Many Requests.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-atk">
+      <pre class="mermaid">
+sequenceDiagram
+    participant ATK as Attacker  (Browser)
+    participant RL as Rate Limiter  (sliding deque)
+    participant API as Flask  /api/login
+    participant BCRYPT as bcrypt  (~150ms/check)
+    participant DB as SQLite
+
+    rect rgb(80,20,20)
+        Note over ATK,DB: 🔴 ATTACK — 16 rapid POST /api/login requests
+        loop Attempts 1 to 15
+            ATK->>API: POST {username:"demo_admin", password:"wrong_N"}
+            API->>RL: _check_rate_limit("login", attacker_ip, limit=15)
+            RL-->>API: ✓ allowed  (N/15 slots used)
+            API->>DB: SELECT user WHERE username="demo_admin"
+            alt user not found
+                API->>BCRYPT: checkpw(dummy, dummy_hash)  ~150ms constant time
+                Note over BCRYPT: Prevents username enumeration by timing
+            else user found
+                API->>BCRYPT: checkpw(wrong_pw, stored_hash)  ~150ms
+            end
+            API->>API: _append_audit_log("login_failed")
+            API-->>ATK: 401 Invalid username or password
+        end
+    end
+
+    rect rgb(20,60,20)
+        Note over ATK,DB: 🛡️ DEFENSE — Rate Limiter blocks on attempt 16
+        ATK->>API: POST {username:"demo_admin", password:"wrong_16"}
+        API->>RL: _check_rate_limit("login", attacker_ip, limit=15)
+        RL-->>API: ✗ BLOCKED  (deque full — 15/15 slots in last 60s)
+        API->>API: _append_audit_log("attack_brute_force_blocked")
+        API-->>ATK: 429 Too Many Requests  {retry_after: 60}
+        Note over ATK: Attacker locked out for 60 seconds
+        Note over ATK: At 150ms/guess: 15 guesses × 150ms = 2.25 sec for 15 attempts
+        Note over ATK: Without rate limit: 10^6 guesses at 150ms = 41 hours
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--red)">Attack Speed Without Defense</div>
+        <p>bcrypt alone limits to ~7 guesses/second/core. An attacker with 10 CPU cores could try 100M passwords in ~160 days — plausible for common passwords.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Rate Limiter (Primary Defense)</div>
+        <p>15 attempts per 60-second window per IP. After exhausting the window, every attempt returns 429 instantly (no bcrypt called). The sliding window resets naturally after 60s.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">bcrypt (Secondary Defense)</div>
+        <p>Even if the rate limiter is bypassed (e.g., from millions of different IPs in a distributed attack), bcrypt makes each guess ~150ms — 6x slower than SHA-256.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Real Simulator</div>
+        <p>The dashboard makes 16 real HTTP calls from your browser. Each 401 response appears in the Live Feed as a <code>login_failed</code> row. The 429 appears as <code>attack_brute_force_blocked</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       8. ATTACK 4 — JWT FORGERY
+  ══════════════════════════════════════════════════════════ -->
+  <section id="jwt">
+    <div class="section-header">
+      <div class="section-icon icon-atk">🪪</div>
+      <div>
+        <h2>Attack 4 — Forged / Expired JWT Token</h2>
+        <p><span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">STRIDE: Spoofing / Elevation of Privilege</span>&nbsp; Three attack vectors: forge a token with the wrong secret, use a real but expired token, craft a token missing required scopes. All three are tested with real <code>jwt.decode()</code> calls.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-atk">
+      <pre class="mermaid">
+sequenceDiagram
+    participant ATK as Attacker
+    participant API as Flask  verify_token()
+    participant JWT as PyJWT  HS256
+
+    rect rgb(80,20,20)
+        Note over ATK,JWT: 🔴 VECTOR 1 — Wrong signing secret
+        ATK->>ATK: token = jwt.encode({"username":"admin"}, "WRONG_SECRET")
+        Note over ATK: Attacker guessed the secret wrong
+        ATK->>API: request with forged token
+        API->>JWT: jwt.decode(token, REAL_SECRET, algorithms=["HS256"])
+        JWT-->>API: ✗ RAISES InvalidSignatureError
+        API-->>ATK: 401  "Invalid token"
+    end
+
+    rect rgb(80,20,20)
+        Note over ATK,JWT: 🔴 VECTOR 2 — Expired token (stolen old token)
+        ATK->>ATK: token = jwt.encode({exp: now - 1hour}, REAL_SECRET)
+        Note over ATK: Valid signature but expired
+        ATK->>API: request with expired token
+        API->>JWT: jwt.decode(token, REAL_SECRET, algorithms=["HS256"])
+        JWT-->>API: ✗ RAISES ExpiredSignatureError
+        API-->>ATK: 401  "Token expired"
+    end
+
+    rect rgb(80,20,20)
+        Note over ATK,JWT: 🔴 VECTOR 3 — Missing required scope
+        ATK->>ATK: token = jwt.encode({scopes:["key:read"]}, REAL_SECRET)
+        Note over ATK: Valid token but wrong scopes (no "chat:send")
+        ATK->>API: send_message with scoped-down token
+        API->>JWT: jwt.decode(token, REAL_SECRET)  → payload OK
+        API->>API: payload["scopes"] has "chat:send"?  → NO
+        API-->>ATK: 401  "Missing scope: chat:send"
+    end
+
+    rect rgb(20,60,20)
+        Note over ATK,JWT: 🛡️ SUMMARY — All 3 vectors blocked by verify_token()
+        Note over API: verify_token() called on EVERY request and socket event
+        Note over API: No way to craft a valid token without the server secret
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--red)">Why Forgery Is Impossible</div>
+        <p>JWT uses HMAC-SHA256. Without the server's secret key, any modification to the token's payload changes the signature. The server rejects it immediately.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Token Expiry (60 min TTL)</div>
+        <p>Even if a token is stolen, it's valid for at most 60 minutes. After expiry, <code>ExpiredSignatureError</code> is raised. The user must re-authenticate.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Scope Enforcement</div>
+        <p>Every SocketIO event handler uses <code>@require_scope("chat:send")</code>. A valid but scope-limited token (e.g. only <code>key:read</code>) cannot perform chat actions.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">Real Simulator</div>
+        <p>Three real Python calls to <code>verify_token()</code> with forged tokens. The exact exception type (<code>InvalidSignatureError</code>, <code>ExpiredSignatureError</code>) is captured and shown in the step trace.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       9. ATTACK 5 — MITM KEY SUBSTITUTION
+  ══════════════════════════════════════════════════════════ -->
+  <section id="mitm">
+    <div class="section-header">
+      <div class="section-icon icon-atk">👥</div>
+      <div>
+        <h2>Attack 5 — MITM Key Substitution</h2>
+        <p><span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">STRIDE: Spoofing / Information Disclosure</span>&nbsp; During the key exchange phase, Mallory intercepts Alice's public key and substitutes her own, hoping Bob will encrypt with Mallory's key and Mallory can read the messages.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-atk">
+      <pre class="mermaid">
+sequenceDiagram
+    participant A as Alice  (Sender)
+    participant M as Mallory  (Attacker)
+    participant S as Server  (users registry)
+    participant B as Bob  (Receiver)
+
+    Note over A,B: ── PHASE 1: Key Registration ──
+    A->>S: register(alice_ecdh_pub, alice_ecdsa_pub)
+    S->>S: users["alice"] = { alice_ecdh_pub, alice_ecdsa_pub }
+    M->>S: register(mallory_ecdh_pub, mallory_ecdsa_pub)
+    S->>S: users["mallory"] = { mallory_ecdh_pub, mallory_ecdsa_pub }
+
+    rect rgb(80,20,20)
+        Note over M,B: 🔴 ATTACK — Mallory intercepts key exchange
+        B->>S: get_public_key("alice")
+        Note over M: Mallory intercepts the response
+        M->>M: Replaces alice_ecdh_pub with mallory_ecdh_pub
+        M-->>B: { mallory_ecdh_pub, alice_ecdsa_pub? }
+        Note over B: Bob derives: ECDH(bob_priv, mallory_pub) = wrong_key
+        Note over M: Mallory derives: ECDH(mallory_priv, bob_pub) = same_key
+    end
+
+    rect rgb(20,60,20)
+        Note over M,S: 🛡️ DEFENSE — ECDSA signature bound to registered key
+        A->>A: message signed with alice_ecdsa_priv (registered at server)
+        A->>S: send_message {ciphertext, sig=ECDSA(alice_priv, envelope)}
+        S->>S: alice_registered_key = users["alice"].ecdsa_pub
+        S->>S: ECDSA verify(alice_registered_key, sig, envelope)
+        S->>S: ✓ Alice's own signature — valid
+        S-->>B: receive_message
+
+        Note over M: Mallory cannot forge Alice's ECDSA signature
+        M->>S: send_message pretending to be Alice
+        S->>S: ECDSA verify(alice_registered_key, mallory_sig, envelope)
+        S->>S: ✗ RAISES InvalidSignature!
+        Note over S: Mallory's key ≠ Alice's registered key
+        S-->>M: delivery_error "Signature verification failed"
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--red)">MITM Goal</div>
+        <p>Mallory wants Bob to think he's talking to Alice but actually encrypting to Mallory's key. If successful, Mallory reads all of Bob's messages intended for Alice.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Why ECDSA Defeats It</div>
+        <p>Alice registered her ECDSA public key at login. The server verifies every message against that registered key. Mallory cannot produce a valid signature for Alice's registered key without Alice's private key.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">Real Simulator Code</div>
+        <p>Generates two real EC keypairs (alice, mallory). Signs with mallory's key. Calls <code>verify_ecdsa(alice_pub, mallory_sig, message)</code> → raises <code>InvalidSignature</code>. Then verifies alice's own sig still passes.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Note on Key Registration</div>
+        <p>The current system registers keys over an unauthenticated channel (no PKI/CA). In production, key pinning or a Certificate Authority would be needed to fully prevent MITM at the registration step.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       10. ATTACK 6 — DoS FLOOD
+  ══════════════════════════════════════════════════════════ -->
+  <section id="dos">
+    <div class="section-header">
+      <div class="section-icon icon-atk">💥</div>
+      <div>
+        <h2>Attack 6 — Message Flood (DoS)</h2>
+        <p><span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)">STRIDE: Denial of Service</span>&nbsp; The simulator sends 121 real <code>GET /api/flood-test</code> HTTP requests from the browser. Requests 1–120 succeed (200 OK). Request 121 hits the rate limit and receives 429. The Scapy sniffer monitors SYN/ACK ratios and alerts Grafana.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-atk">
+      <pre class="mermaid">
+sequenceDiagram
+    participant ATK as Attacker  (Browser)
+    participant RL as Rate Limiter  (per user)
+    participant API as Flask  /api/flood-test
+    participant INFLUX as InfluxDB
+    participant GRAFANA as Grafana
+
+    rect rgb(80,20,20)
+        Note over ATK,API: 🔴 ATTACK — 121 rapid requests
+        loop Requests 1 to 120
+            ATK->>API: GET /api/flood-test  [Authorization: Bearer JWT]
+            API->>RL: _check_rate_limit("flood_test", username, 120)
+            RL-->>API: ✓ allowed  (N/120 slots used)
+            API-->>ATK: 200 OK  {ok: true}
+        end
+    end
+
+    rect rgb(20,60,20)
+        Note over ATK,API: 🛡️ APPLICATION DEFENSE — Rate Limiter fires on #121
+        ATK->>API: GET /api/flood-test  [request #121]
+        API->>RL: _check_rate_limit("flood_test", username, 120)
+        RL-->>API: ✗ BLOCKED  (deque full — 120/120 slots in 60s window)
+        API->>API: _append_audit_log("attack_dos_blocked", {retry_after})
+        API-->>ATK: 429 Too Many Requests  {retry_after: 60}
+        Note over ATK: All subsequent requests return 429 for ~60 seconds
+    end
+
+    rect rgb(10,40,60)
+        Note over INFLUX,GRAFANA: 🛡️ NETWORK DEFENSE — Scapy SYN/ACK monitoring
+        Note over INFLUX: Scapy sniffer on host OS captures TCP packets
+        Note over INFLUX: syn_count/ack_count over last 200 packets
+        Note over INFLUX: ratio = syn_count / max(ack_count, 1)
+        API->>INFLUX: write Point{syn_ack_ratio, dos_suspected=1}
+        INFLUX->>GRAFANA: time-series data
+        GRAFANA->>GRAFANA: Plot SYN/ACK ratio — red threshold line at 3.0
+        Note over GRAFANA: Visual alert: dos_suspected=1 highlighted red
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--red)">Attack Goal</div>
+        <p>Exhaust server resources (CPU, connections, memory) by sending requests faster than the server can process them, making the service unavailable to legitimate users.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Application Rate Limit</div>
+        <p>Same sliding-window deque used for real chat message sending (120/60s). Shared rate limit key ensures DoS protection applies to both real messages and flood attempts.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">Network-Level Monitor</div>
+        <p>Scapy captures raw TCP packets. SYN/ACK ratio &gt; 3.0 with &gt;10 SYN packets triggers <code>dos_suspected=1</code> in InfluxDB. Grafana shows a red spike on the dashboard chart.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Real Simulator</div>
+        <p>121 real HTTP fetch() calls from your browser. The streaming UI updates every 20 requests showing "108/121 accepted" then "BLOCKED at #121". The <code>attack_dos_blocked</code> event appears in the Live Feed instantly.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       11. AUDIT LOG CHAIN
+  ══════════════════════════════════════════════════════════ -->
+  <section id="audit">
+    <div class="section-header">
+      <div class="section-icon icon-audit">📜</div>
+      <div>
+        <h2>Audit Log — Hash-Chained &amp; ECDSA-Signed</h2>
+        <p>Every security event is appended to an NDJSON file where each entry's hash includes the previous entry's hash. Tampering with any past entry invalidates the entire chain forward. Each entry is also signed with an ECDSA key held by the server.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-audit">
+      <pre class="mermaid">
+graph LR
+    GENESIS["Genesis\nprev_hash = 0x000...0"]
+
+    E1["Entry #1\n──────────\nevent: account_created\nusername: alice\ntimestamp: 10:00:00\n──────────\nprev_hash: 0x000...0\nentry_hash: SHA256(prev+event)\nsig: ECDSA(entry_hash)"]
+
+    E2["Entry #2\n──────────\nevent: login_success\nusername: alice\ntimestamp: 10:00:05\n──────────\nprev_hash: hash_of_E1\nentry_hash: SHA256(prev+event)\nsig: ECDSA(entry_hash)"]
+
+    E3["Entry #3\n──────────\nevent: message_sent\nfrom: alice → bob\nmsgId: uuid-abc\n──────────\nprev_hash: hash_of_E2\nentry_hash: SHA256(prev+event)\nsig: ECDSA(entry_hash)"]
+
+    EN["Entry #N\n──────────\nevent: attack_dos_blocked\nusername: alice\nretry_after: 60s\n──────────\nprev_hash: hash_of_EN-1\nentry_hash: SHA256(prev+event)\nsig: ECDSA(entry_hash)"]
+
+    TAMPER["⚠ TAMPER ATTEMPT\nChange event in Entry #2\n──────────\nentry_hash changes\nall subsequent\nprev_hash values\nbecome WRONG\n──────────\nchain_valid = FALSE"]
+
+    GENESIS -->|"hash links"| E1
+    E1 -->|"hash_of_E1"| E2
+    E2 -->|"hash_of_E2"| E3
+    E3 -->|"..."| EN
+    E2 -.->|"modify E2"| TAMPER
+
+    style GENESIS fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+    style E1 fill:#1e293b,stroke:#334155,color:#e2e8f0
+    style E2 fill:#1e293b,stroke:#334155,color:#e2e8f0
+    style E3 fill:#1e293b,stroke:#334155,color:#e2e8f0
+    style EN fill:#1e293b,stroke:#334155,color:#e2e8f0
+    style TAMPER fill:#3b0f0f,stroke:#ef4444,color:#fca5a5
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Hash Chaining</div>
+        <p><code>entry_hash = SHA256(previous_hash + canonical_json_of_event)</code>. Changing any character in any historical entry changes its hash, breaking all subsequent links.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">ECDSA Signing</div>
+        <p>Each entry's <code>entry_hash</code> is signed with the server's audit ECDSA private key. Proves the entry was created by this server, not by an attacker who also controls the log file.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">SQLite Mirror</div>
+        <p>Every entry is also written to <code>security_events</code> SQLite table for real-time querying by the dashboard. The NDJSON file is the authoritative tamper-evident record.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Chain Verification</div>
+        <p>The <code>GET /api/audit</code> endpoint walks the entire chain, verifying each <code>previous_hash</code> matches the prior entry's <code>entry_hash</code>. Returns <code>chain_valid: true/false</code>. Visible in the UI sidebar.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       12. ALL 8 DEFENSE LAYERS
+  ══════════════════════════════════════════════════════════ -->
+  <section id="defenses">
+    <div class="section-header">
+      <div class="section-icon icon-auth">🛡️</div>
+      <div>
+        <h2>All 8+ Defense Layers — At a Glance</h2>
+        <p>Every layer is active and enforced on every request. The defense-in-depth principle means an attacker must defeat multiple independent mechanisms.</p>
+      </div>
+    </div>
+
+    <div class="defense-grid">
+      <div class="def-card">
+        <h4>① AES-256-GCM Encryption</h4>
+        <p>AEAD cipher — one operation gives both confidentiality and integrity. 16-byte auth tag detects any ciphertext modification.</p>
+        <code>AESGCM(key).decrypt(iv, ct, aad) → raises InvalidTag</code>
+      </div>
+      <div class="def-card">
+        <h4>② ECDH P-256 Key Exchange (PFS)</h4>
+        <p>Ephemeral keys generated fresh each session. Shared AES key is derived locally — never transmitted. Perfect Forward Secrecy.</p>
+        <code>shared = ECDH(alice_priv, bob_pub) → HKDF-SHA256</code>
+      </div>
+      <div class="def-card">
+        <h4>③ ECDSA P-256 Digital Signatures</h4>
+        <p>Every message envelope is signed. Server verifies against the sender's registered public key before forwarding. Prevents tampering and MITM.</p>
+        <code>verify_ecdsa(registered_pub, sig, envelope) → InvalidSignature</code>
+      </div>
+      <div class="def-card">
+        <h4>④ SHA-256 Plaintext Hash</h4>
+        <p>Computed before encryption, verified after decryption. Provides a third independent integrity check at the plaintext level.</p>
+        <code>SHA256(plaintext) === data.hash → or reject</code>
+      </div>
+      <div class="def-card">
+        <h4>⑤ JWT Authentication + Scopes</h4>
+        <p>HS256-signed tokens with 60-min TTL and per-action scopes. Every API and socket event verifies the token before acting.</p>
+        <code>jwt.decode(token, SECRET) → InvalidTokenError / ExpiredSignatureError</code>
+      </div>
+      <div class="def-card">
+        <h4>⑥ Sliding-Window Rate Limiter</h4>
+        <p>Per-IP login: 15/60s. Per-user messages: 120/60s. Per-IP connections: 40/60s. Returns HTTP 429 with retry-after seconds.</p>
+        <code>_check_rate_limit(action, subject, limit) → False, retry</code>
+      </div>
+      <div class="def-card">
+        <h4>⑦ bcrypt Password Hashing</h4>
+        <p>Cost factor 12 (~150ms/check). Per-password random salt defeats rainbow tables. Dummy check for non-existent users prevents timing-based enumeration.</p>
+        <code>bcrypt.hashpw(pw, gensalt(rounds=12)) → 60-byte hash</code>
+      </div>
+      <div class="def-card">
+        <h4>⑧ Hash-Chained Audit Log</h4>
+        <p>Every event SHA-256 chained to the previous. Each entry ECDSA-signed. Append-only file. Chain validity displayed in UI.</p>
+        <code>entry_hash = SHA256(prev_hash + event_json)</code>
+      </div>
+      <div class="def-card">
+        <h4>⑨ Server-Side Replay Deduplication</h4>
+        <p>In-memory <code>seen_message_ids</code> set tracks all (sender, msgId) pairs. Duplicate emits <code>delivery_error</code> and logs <code>attack_replay_blocked</code>.</p>
+        <code>if msg_key in seen_message_ids: → reject + log</code>
+      </div>
+      <div class="def-card">
+        <h4>⑩ Scapy SYN/ACK Network Monitor</h4>
+        <p>Captures raw TCP packets on host interfaces. SYN/ACK ratio &gt; 3.0 → <code>dos_suspected=1</code> → InfluxDB → Grafana visual alert.</p>
+        <code>ratio = syn_count / max(ack_count, 1) → if ≥ 3.0: alert</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       13. STRIDE THREAT MODEL
+  ══════════════════════════════════════════════════════════ -->
+  <section id="stride">
+    <div class="section-header">
+      <div class="section-icon icon-stride">🎯</div>
+      <div>
+        <h2>STRIDE Threat Model Coverage</h2>
+        <p>STRIDE is a standard framework for categorizing security threats. All 6 STRIDE categories are covered by this system.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-stride" style="padding:0;overflow:hidden">
+      <table class="stride-table">
+        <thead>
+          <tr>
+            <th>Letter</th>
+            <th>Threat Category</th>
+            <th>Attack Simulated</th>
+            <th>Defense Mechanism</th>
+            <th>Exception / Response</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="letter" style="background:rgba(59,130,246,0.2);color:#3b82f6">S</div></td>
+            <td><strong>Spoofing</strong><br><span style="font-size:10px;color:#94a3b8">Pretending to be someone else</span></td>
+            <td>Forged JWT · MITM Key Substitution</td>
+            <td>JWT HS256 signature verification · ECDSA bound to registered public key</td>
+            <td><code style="font-size:10px">InvalidTokenError · InvalidSignature</code></td>
+          </tr>
+          <tr>
+            <td><div class="letter" style="background:rgba(239,68,68,0.2);color:#ef4444">T</div></td>
+            <td><strong>Tampering</strong><br><span style="font-size:10px;color:#94a3b8">Modifying data in transit</span></td>
+            <td>Ciphertext Tampering (MITM bit-flip)</td>
+            <td>AES-256-GCM auth tag · ECDSA signature over envelope · SHA-256 hash</td>
+            <td><code style="font-size:10px">InvalidTag · InvalidSignature · hash mismatch</code></td>
+          </tr>
+          <tr>
+            <td><div class="letter" style="background:rgba(245,158,11,0.2);color:#f59e0b">R</div></td>
+            <td><strong>Repudiation</strong><br><span style="font-size:10px;color:#94a3b8">Denying an action was performed</span></td>
+            <td>Replay Attack (covers event traceability)</td>
+            <td>ECDSA non-repudiation · Hash-chained ECDSA-signed audit log</td>
+            <td><code style="font-size:10px">chain_valid: true in /api/audit</code></td>
+          </tr>
+          <tr>
+            <td><div class="letter" style="background:rgba(139,92,246,0.2);color:#8b5cf6">I</div></td>
+            <td><strong>Information Disclosure</strong><br><span style="font-size:10px;color:#94a3b8">Exposing private data</span></td>
+            <td>MITM Key Substitution (to read messages)</td>
+            <td>ECDH PFS (shared key never transmitted) · AES-256-GCM E2EE · Server never stores/decrypts</td>
+            <td><code style="font-size:10px">Server only sees ciphertext blobs</code></td>
+          </tr>
+          <tr>
+            <td><div class="letter" style="background:rgba(249,115,22,0.2);color:#f97316">D</div></td>
+            <td><strong>Denial of Service</strong><br><span style="font-size:10px;color:#94a3b8">Making service unavailable</span></td>
+            <td>Message Flood (121 rapid requests)</td>
+            <td>Sliding-window rate limiter (120/60s) · Scapy SYN/ACK monitor · Grafana alerting</td>
+            <td><code style="font-size:10px">HTTP 429 · dos_suspected=1 → Grafana</code></td>
+          </tr>
+          <tr>
+            <td><div class="letter" style="background:rgba(16,185,129,0.2);color:#10b981">E</div></td>
+            <td><strong>Elevation of Privilege</strong><br><span style="font-size:10px;color:#94a3b8">Gaining unauthorised access level</span></td>
+            <td>Brute Force Login · Forged JWT Scopes</td>
+            <td>Rate limiter (15/60s per IP) · bcrypt delay · JWT scope enforcement</td>
+            <td><code style="font-size:10px">HTTP 429 · Missing scope: chat:send</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:16px">
+      <div class="diagram-card type-stride">
+        <pre class="mermaid">
+graph LR
+    subgraph STRIDE["STRIDE Threat Model — Full Coverage"]
+        S["S — Spoofing\nJWT verification\nECDSA signatures"]
+        T["T — Tampering\nAES-GCM auth tag\nECDSA envelope sig\nSHA-256 hash"]
+        R["R — Repudiation\nHash-chained audit log\nECDSA non-repudiation"]
+        I["I — Info Disclosure\nECDH PFS\nAES-256-GCM E2EE"]
+        D["D — Denial of Service\nSliding-window rate limit\nScapy SYN/ACK monitor"]
+        E["E — Elev of Privilege\nRate limit + bcrypt\nJWT scope enforcement"]
+    end
+
+    style S fill:#1d3a6e,stroke:#3b82f6,color:#93c5fd
+    style T fill:#4a1010,stroke:#ef4444,color:#fca5a5
+    style R fill:#3d2800,stroke:#f59e0b,color:#fde68a
+    style I fill:#2d1a5e,stroke:#8b5cf6,color:#c4b5fd
+    style D fill:#3d1f00,stroke:#f97316,color:#fdba74
+    style E fill:#0d3d2a,stroke:#10b981,color:#6ee7b7
+        </pre>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  // Initialize Mermaid with dark theme
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    fontFamily: 'monospace',
+    sequence: {
+      actorMargin: 60,
+      width: 160,
+      height: 50,
+      boxMargin: 10,
+      boxTextMargin: 5,
+      noteMargin: 10,
+      messageMargin: 40,
+      mirrorActors: false,
+      useMaxWidth: true,
+    },
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+    },
+    themeVariables: {
+      darkMode: true,
+      background:           '#0a0f1e',
+      primaryColor:         '#1e3a5f',
+      primaryTextColor:     '#e2e8f0',
+      primaryBorderColor:   '#334155',
+      lineColor:            '#64748b',
+      secondaryColor:       '#0f2744',
+      tertiaryColor:        '#0a1929',
+      mainBkg:              '#1e293b',
+      nodeBorder:           '#334155',
+      clusterBkg:           '#0f172a',
+      titleColor:           '#e2e8f0',
+      edgeLabelBackground:  '#1e293b',
+      // Sequence diagram specific
+      actorBkg:             '#1e3a5f',
+      actorBorder:          '#3b82f6',
+      actorTextColor:       '#e2e8f0',
+      actorLineColor:       '#334155',
+      signalColor:          '#94a3b8',
+      signalTextColor:      '#e2e8f0',
+      labelBoxBkgColor:     '#1e293b',
+      labelBoxBorderColor:  '#334155',
+      labelTextColor:       '#e2e8f0',
+      loopTextColor:        '#e2e8f0',
+      noteBorderColor:      '#f59e0b',
+      noteBkgColor:         '#422006',
+      noteTextColor:        '#fef3c7',
+      activationBorderColor:'#10b981',
+      activationBkgColor:   '#064e3b',
+    }
+  });
+
+  // Highlight active nav link on scroll
+  const sections = document.querySelectorAll('section');
+  const navLinks  = document.querySelectorAll('nav a');
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navLinks.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector(`nav a[href="#${entry.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { threshold: 0.3 });
+
+  sections.forEach(s => observer.observe(s));
+
+  // Smooth scroll
+  navLinks.forEach(link => {
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      const id = link.getAttribute('href').slice(1);
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+</script>
+</body>
+</html>
