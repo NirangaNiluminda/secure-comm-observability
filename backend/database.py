@@ -6,7 +6,7 @@ Stores registered user credentials so they survive backend restarts.
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'users.db')
+DB_PATH = os.getenv('DB_PATH', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'users.db'))
 
 
 def get_connection():

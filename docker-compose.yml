@@ -1,9 +1,78 @@
-version: '3.8'
+# ─────────────────────────────────────────────────────────────
+# Secure Communication & Traffic Observability
+# ─────────────────────────────────────────────────────────────
+#
+#  Start everything:   docker compose up --build
+#  Stop everything:    docker compose down
+#  Wipe all data:      docker compose down -v
+#
+#  Services:
+#    frontend   →  http://localhost          (React chat + dashboard)
+#    backend    →  http://localhost:5000     (Flask + SocketIO API)
+#    grafana    →  http://localhost:3000     (DoS anomaly charts)
+#    influxdb   →  http://localhost:8086     (time-series metrics)
+#
+#  Optional monitor (Scapy packet sniffer — Linux only):
+#    docker compose --profile monitor up --build
+# ─────────────────────────────────────────────────────────────
 
 services:
+
+  # ── Flask + SocketIO backend ─────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: securechat_backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"     # exposed to host so Scapy sniffer can capture port 5000 traffic
+    environment:
+      - USE_SSL=false                                    # nginx handles TLS termination
+      - JWT_SECRET=change-me-before-production-use
+      - JWT_TTL_MINUTES=60
+      - RATE_LIMIT_WINDOW_SECONDS=60
+      - RATE_LIMIT_CONNECT_PER_WINDOW=40
+      - RATE_LIMIT_REGISTER_PER_WINDOW=15
+      - RATE_LIMIT_SEND_PER_WINDOW=120
+      # Persistent file paths inside the /data volume
+      - DB_PATH=/data/users.db
+      - AUDIT_LOG_PATH=/data/audit_log.ndjson
+      - AUDIT_STATE_PATH=/data/audit_chain_state.json
+      - AUDIT_PRIVATE_KEY_PATH=/data/audit_signing_key.pem
+      - AUDIT_PUBLIC_KEY_PATH=/data/audit_signing_public.pem
+    volumes:
+      - backend-data:/data      # users.db + audit log survive restarts
+    networks:
+      - securechat-net
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── React + Nginx frontend ────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: securechat_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"          # open http://localhost in your browser
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - securechat-net
+
+  # ── InfluxDB (time-series store for DoS metrics) ──────────────
   influxdb:
     image: influxdb:2.7
     container_name: securechat_influxdb
+    restart: unless-stopped
     ports:
       - "8086:8086"
     environment:
@@ -15,19 +84,57 @@ services:
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
     volumes:
       - influxdb-data:/var/lib/influxdb2
+    networks:
+      - securechat-net
 
+  # ── Grafana (visualise network anomaly alerts) ────────────────
   grafana:
     image: grafana/grafana:latest
     container_name: securechat_grafana
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3000:3000"      # open http://localhost:3000  (admin / admin)
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
       - influxdb
     volumes:
       - grafana-data:/var/lib/grafana
+    networks:
+      - securechat-net
 
+  # ── Scapy packet sniffer (optional — Linux host only) ─────────
+  # Requires host networking + NET_RAW capability to capture packets.
+  # Enable with:  docker compose --profile monitor up --build
+  monitor:
+    profiles:
+      - monitor
+    build:
+      context: ./monitor
+      dockerfile: Dockerfile
+    container_name: securechat_monitor
+    restart: unless-stopped
+    network_mode: host         # must see host network traffic
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - INFLUX_URL=http://localhost:8086
+      - INFLUX_TOKEN=my-super-secret-auth-token
+      - INFLUX_ORG=securechat
+      - INFLUX_BUCKET=network_metrics
+      - CAPTURE_FILTER=tcp port 5000
+      - SYN_ACK_WINDOW=200
+      - DOS_RATIO_THRESHOLD=3.0
+    depends_on:
+      - influxdb
+
+# ─────────────────────────────────────────────────────────────
 volumes:
+  backend-data:    # users.db + audit log + signing keys
   influxdb-data:
   grafana-data:
+
+networks:
+  securechat-net:
+    driver: bridge

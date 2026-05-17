@@ -37,6 +37,10 @@ db.init_db()
 users: dict = {}
 session_keys: dict = {}
 
+# Server-side replay protection: tracks seen message IDs this session
+seen_message_ids: set = set()
+seen_message_ids_lock = threading.Lock()
+
 # ─────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────
@@ -237,6 +241,18 @@ def http_register():
 
 @app.route('/api/login', methods=['POST'])
 def http_login():
+    ip = _client_ip()
+    # ── Rate-limit login attempts per IP (brute-force protection) ────────────
+    ok, retry = _check_rate_limit('login', ip, RATE_LIMIT_REGISTER_PER_WINDOW)
+    if not ok:
+        _append_audit_log('attack_brute_force_blocked', {
+            'ip': ip, 'reason': 'rate_limit_exceeded', 'retry_after': retry,
+        })
+        return jsonify({
+            'error': f'Too many login attempts. Retry after {retry}s.',
+            'retry_after': retry,
+        }), 429
+
     data     = request.get_json(silent=True) or {}
     username = (data.get('username') or '').strip()
     password = (data.get('password') or '').strip()
@@ -261,6 +277,39 @@ def http_login():
     token = generate_jwt(username)
     _append_audit_log('login_success', {'username': username, 'ip': _client_ip()})
     return jsonify({'token': token, 'username': username}), 200
+
+# ─────────────────────────────────────────────────────────────
+# HTTP: DoS flood-test endpoint (rate-limited — used by DoS attack demo)
+# ─────────────────────────────────────────────────────────────
+
+@app.route('/api/flood-test', methods=['GET', 'POST'])
+def http_flood_test():
+    """
+    Purpose-built endpoint for the DoS attack demo.
+    Uses the SAME sliding-window rate limiter (120 req/60s) as chat message
+    sending, so the demo shows the identical defence that protects the real system.
+    """
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    payload, err = verify_token(token)
+    if err:
+        return jsonify({'error': err}), 401
+
+    username = payload.get('username', 'unknown')
+    ok, retry = _check_rate_limit('flood_test', username, RATE_LIMIT_SEND_PER_WINDOW)
+    if not ok:
+        _append_audit_log('attack_dos_blocked', {
+            'username': username,
+            'ip':       _client_ip(),
+            'reason':   'rate_limit_exceeded',
+            'retry_after': retry,
+        })
+        return jsonify({
+            'error':       f'Rate limit exceeded. Retry after {retry}s.',
+            'retry_after': retry,
+        }), 429
+
+    return jsonify({'ok': True, 'message': 'Request accepted'})
+
 
 # ─────────────────────────────────────────────────────────────
 # HTTP: Audit log viewer
@@ -331,8 +380,8 @@ ATTACK_DEFINITIONS = {
         'name': 'Replay Attack',
         'description': 'Resend an already-delivered message with the same message_id to trick the recipient.',
         'layer': 'Application Layer',
-        'defense': 'Message-ID deduplication set + 5-minute timestamp window',
-        'defense_code': 'seenMessageIds.has(`${from}:${message_id}`) → reject',
+        'defense': 'Server-side message-ID deduplication set (seen_message_ids) + client-side seenMessageIds set + 5-minute timestamp window',
+        'defense_code': 'msg_key in seen_message_ids → emit("delivery_error", "Replay attack detected")',
         'mitigation': 'STRIDE: Spoofing / Repudiation',
     },
     'tamper': {
@@ -345,10 +394,10 @@ ATTACK_DEFINITIONS = {
     },
     'brute_force': {
         'name': 'Brute Force Login',
-        'description': 'Attempt 16 rapid login requests with wrong passwords to guess credentials.',
+        'description': 'Send 16 real POST /api/login requests with wrong passwords from the browser — rate limiter blocks at attempt #16.',
         'layer': 'Authentication Layer',
-        'defense': 'Rate limiter: max 15 register/login attempts per 60-second window per IP',
-        'defense_code': '_check_rate_limit("register", ip, 15) → 429 Too Many Requests',
+        'defense': 'Sliding-window rate limiter on /api/login: max 15 attempts per 60-second window per IP + bcrypt work-factor delay',
+        'defense_code': '_check_rate_limit("login", ip, 15) → HTTP 429 Too Many Requests',
         'mitigation': 'STRIDE: Elevation of Privilege',
     },
     'invalid_jwt': {
@@ -369,10 +418,10 @@ ATTACK_DEFINITIONS = {
     },
     'dos': {
         'name': 'Message Flood (DoS)',
-        'description': 'Send 130 messages rapidly to exhaust server resources.',
+        'description': 'Send 121 real GET /api/flood-test requests from the browser — same rate limiter (120 req/60s) as chat messages blocks at #121.',
         'layer': 'Network / Application Layer',
-        'defense': 'Per-user sliding-window rate limiter: max 120 messages/60s + Scapy SYN/ACK monitor',
-        'defense_code': '_check_rate_limit("send", username, 120) → emit rate_limit event',
+        'defense': 'Per-user sliding-window rate limiter: max 120 req/60s per user + Scapy SYN/ACK monitor',
+        'defense_code': '_check_rate_limit("flood_test", username, 120) → HTTP 429 Too Many Requests',
         'mitigation': 'STRIDE: Denial of Service',
     },
 }
@@ -416,33 +465,49 @@ def _run_attack_simulation(attack_type: str, username: str) -> dict:
 
     # ── Replay ────────────────────────────────────────────────
     if attack_type == 'replay':
-        seen   = set()
-        msg_id = 'msg-demo-replay-9f3a'
-        key1   = f'alice:{msg_id}'
+        msg_id = f'msg-demo-replay-{username}-9f3a'
+        key1   = f'demo_alice:{msg_id}'
 
-        # Simulate real set-based deduplication (mirrors client seenMessageIds)
-        first_ok  = key1 not in seen          # True  — first delivery allowed
-        seen.add(key1)
-        second_ok = key1 not in seen          # False — already seen → blocked
+        # Use the REAL server-side seen_message_ids set (same one handle_message uses)
+        with seen_message_ids_lock:
+            first_allowed = key1 not in seen_message_ids   # True on first run
+            if first_allowed:
+                seen_message_ids.add(key1)                 # first delivery recorded
 
-        # Simulate 5-minute timestamp window check
+        with seen_message_ids_lock:
+            replay_blocked = key1 in seen_message_ids      # True — already in set
+
+        # Log the replay attempt to audit chain / SQLite live feed
+        if replay_blocked:
+            _append_audit_log('attack_replay_blocked', {
+                'from':       'demo_alice',
+                'to':         username,
+                'message_id': msg_id,
+                'reason':     'duplicate_message_id',
+                'note':       'replay_simulation',
+            })
+
+        # Clean up demo key so it does not pollute real message dedup
+        with seen_message_ids_lock:
+            seen_message_ids.discard(key1)
+
+        # Timestamp window check (mirroring client-side 5-min window)
         ts_now   = _t.time()
         ts_stale = ts_now - 400               # 400 s ago — outside 300 s window
-        fresh_pass = abs(ts_now - ts_now)  < 300   # True  — same-time message passes
-        stale_pass = abs(ts_now - ts_stale) < 300   # False — stale message blocked
+        stale_pass = abs(ts_now - ts_stale) < 300   # False — stale → blocked
 
         return {
             'blocked': True,
             'real':    True,
             'steps': [
                 {'step': 1, 'action': f'Attacker captures message_id = "{msg_id}"', 'result': 'captured', 'ok': True},
-                {'step': 2, 'action': f'First delivery — seenIds.has("{key1}") = {not first_ok}', 'result': 'DELIVERED', 'ok': True},
-                {'step': 3, 'action': f'seen.add("{key1}") — ID now recorded in dedup set', 'result': f'set size = {len(seen)}', 'ok': True},
-                {'step': 4, 'action': f'Replay — seenIds.has("{key1}") = {not second_ok}', 'result': 'REPLAY BLOCKED', 'ok': False},
-                {'step': 5, 'action': f'Timestamp delta = 400 s > 300 s window — stale_pass={stale_pass}', 'result': 'STALE MESSAGE REJECTED', 'ok': False},
+                {'step': 2, 'action': f'REAL: first delivery — key "{key1}" not in seen_message_ids → allowed', 'result': 'DELIVERED — ID added to server set', 'ok': True},
+                {'step': 3, 'action': f'REAL: seen_message_ids.add("{key1}") — ID recorded server-side', 'result': f'set now tracks this message_id', 'ok': True},
+                {'step': 4, 'action': f'REAL: replay attempt — key in seen_message_ids = {replay_blocked}', 'result': 'REPLAY BLOCKED — emit("delivery_error")', 'ok': False},
+                {'step': 5, 'action': f'REAL: client timestamp delta = 400 s > 300 s window — stale_pass={stale_pass}', 'result': 'STALE MESSAGE REJECTED (client-side too)', 'ok': False},
             ],
-            'defense_triggered': 'Real set deduplication + 5-minute timestamp window',
-            'error_returned':    f'Duplicate message_id detected — key={key1}',
+            'defense_triggered': 'Real server-side seen_message_ids set + client-side timestamp window — attack_replay_blocked written to DB',
+            'error_returned':    f'deliver_error: "Replay attack detected: duplicate message_id" (key={key1})',
         }
 
     # ── Ciphertext Tampering ──────────────────────────────────
@@ -865,6 +930,22 @@ def handle_message(data):
     if not ok:
         emit('rate_limit', {'error': 'Too many messages', 'retry_after': retry})
         return
+
+    # ── Server-side replay detection ─────────────────────────────────────────
+    # Dedup by (from, message_id) so replaying the same payload is rejected.
+    msg_key  = f"{data.get('from')}:{data.get('message_id')}"
+    sent_at  = data.get('sent_at', '')
+    with seen_message_ids_lock:
+        if msg_key in seen_message_ids:
+            _append_audit_log('attack_replay_blocked', {
+                'from':       sender,
+                'to':         data.get('to'),
+                'message_id': data.get('message_id'),
+                'reason':     'duplicate_message_id',
+            })
+            emit('delivery_error', {'error': 'Replay attack detected: duplicate message_id'})
+            return
+        seen_message_ids.add(msg_key)
 
     recipient = data.get('to')
     if recipient not in users:

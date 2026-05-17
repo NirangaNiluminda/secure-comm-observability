@@ -1,4 +1,4 @@
-from scapy.all import sniff, IP, TCP
+from scapy.all import sniff, IP, TCP, get_if_list
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 import time
@@ -10,7 +10,7 @@ INFLUX_URL = os.getenv("INFLUX_URL", "http://localhost:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN", "my-super-secret-auth-token")
 INFLUX_ORG = os.getenv("INFLUX_ORG", "securechat")
 INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "network_metrics")
-CAPTURE_FILTER = os.getenv("CAPTURE_FILTER", "tcp port 5000")
+CAPTURE_FILTER = os.getenv("CAPTURE_FILTER", "tcp port 80")
 SYN_ACK_WINDOW = int(os.getenv("SYN_ACK_WINDOW", "200"))
 DOS_RATIO_THRESHOLD = float(os.getenv("DOS_RATIO_THRESHOLD", "3.0"))
 
@@ -88,5 +88,6 @@ def process_packet(packet):
         except Exception as e:
             print(f"InfluxDB write error: {e}")
 
-print(f"Starting Scapy Sniffer with filter: {CAPTURE_FILTER}")
-sniff(filter=CAPTURE_FILTER, prn=process_packet, store=False)
+ifaces = get_if_list()
+print(f"Starting Scapy Sniffer — interfaces: {ifaces}  filter: {CAPTURE_FILTER}")
+sniff(filter=CAPTURE_FILTER, iface=ifaces, prn=process_packet, store=False)

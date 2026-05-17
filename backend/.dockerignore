@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+# Runtime-generated files — stored in the /data volume, not baked into the image
+users.db
+audit_log.ndjson
+audit_chain_state.json
+audit_signing_key.pem
+audit_signing_public.pem
