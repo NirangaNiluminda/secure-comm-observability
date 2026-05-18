@@ -477,15 +477,8 @@ def _run_attack_simulation(attack_type: str, username: str) -> dict:
         with seen_message_ids_lock:
             replay_blocked = key1 in seen_message_ids      # True — already in set
 
-        # Log the replay attempt to audit chain / SQLite live feed
-        if replay_blocked:
-            _append_audit_log('attack_replay_blocked', {
-                'from':       'demo_alice',
-                'to':         username,
-                'message_id': msg_id,
-                'reason':     'duplicate_message_id',
-                'note':       'replay_simulation',
-            })
+        # NOTE: do NOT log here — simulate_attack() logs 'attack_replay_blocked'
+        # after _run_attack_simulation() returns, so logging here would double-count.
 
         # Clean up demo key so it does not pollute real message dedup
         with seen_message_ids_lock:
@@ -567,14 +560,16 @@ def _run_attack_simulation(attack_type: str, username: str) -> dict:
         retry_after = 60
         attempt_log = []
 
-        # Clear any stale rate-limit state from a previous simulation run
+        # Clear any stale rate-limit state from a previous simulation run.
+        # Use the SAME 'login' action key as the real /api/login endpoint so the
+        # simulation is faithful to the actual defence.
         with rate_limit_lock:
-            rate_limit_state.pop(f'register:{sim_ip}', None)
+            rate_limit_state.pop(f'login:{sim_ip}', None)
 
         # REAL: 16 attempts — each allowed one writes a real login_failed row to SQLite
         # so the Live Security Events feed shows them appearing in real time.
         for attempt in range(1, 17):
-            ok, retry = _check_rate_limit('register', sim_ip, 15)
+            ok, retry = _check_rate_limit('login', sim_ip, 15)
 
             if not ok and blocked_at is None:
                 blocked_at  = attempt

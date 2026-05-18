@@ -101,9 +101,11 @@ def get_security_stats() -> dict:
         'message_rejected': stats.get('message_rejected', 0),
         'rate_limited': stats.get('rate_limited', 0),
         'attack_replay_blocked': stats.get('attack_replay_blocked', 0),
-        'attack_tamper_detected': stats.get('attack_tamper_detected', 0),
+        # Event is logged as 'attack_tamper_blocked' by simulate_attack()
+        'attack_tamper_detected': stats.get('attack_tamper_blocked', 0),
         'attack_brute_force_blocked': stats.get('attack_brute_force_blocked', 0),
-        'attack_invalid_jwt': stats.get('attack_invalid_jwt', 0),
+        # Event is logged as 'attack_invalid_jwt_blocked' by simulate_attack()
+        'attack_invalid_jwt': stats.get('attack_invalid_jwt_blocked', 0),
         'attack_mitm_blocked': stats.get('attack_mitm_blocked', 0),
         'attack_dos_blocked': stats.get('attack_dos_blocked', 0),
     }

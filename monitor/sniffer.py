@@ -3,6 +3,9 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 import time
 import os
+import socket
+import fcntl
+import struct
 from collections import deque
 
 # InfluxDB Configuration
@@ -10,7 +13,7 @@ INFLUX_URL = os.getenv("INFLUX_URL", "http://localhost:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN", "my-super-secret-auth-token")
 INFLUX_ORG = os.getenv("INFLUX_ORG", "securechat")
 INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "network_metrics")
-CAPTURE_FILTER = os.getenv("CAPTURE_FILTER", "tcp port 80")
+CAPTURE_FILTER = os.getenv("CAPTURE_FILTER", "tcp port 5000")
 SYN_ACK_WINDOW = int(os.getenv("SYN_ACK_WINDOW", "200"))
 DOS_RATIO_THRESHOLD = float(os.getenv("DOS_RATIO_THRESHOLD", "3.0"))
 
@@ -19,6 +22,31 @@ write_api = client.write_api(write_options=SYNCHRONOUS)
 
 syn_window = deque(maxlen=SYN_ACK_WINDOW)
 ack_window = deque(maxlen=SYN_ACK_WINDOW)
+
+
+def get_active_interfaces():
+    """
+    Return only interfaces that are currently UP.
+    Avoids OSError: [Errno 100] Network is down on virtual/tunnel interfaces
+    (tunl0, gre0, sit0, ip6tnl0, etc.) that exist but are not active.
+    """
+    SIOCGIFFLAGS = 0x8913
+    IFF_UP = 0x1
+    active = []
+    for iface in get_if_list():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            result = fcntl.ioctl(
+                s.fileno(), SIOCGIFFLAGS,
+                struct.pack('256s', iface[:15].encode('utf-8'))
+            )
+            s.close()
+            flags = struct.unpack('H', result[16:18])[0]
+            if flags & IFF_UP:
+                active.append(iface)
+        except Exception:
+            pass   # skip interfaces that can't be queried
+    return active
 
 
 def parse_tcp_flags(flags):
@@ -77,7 +105,7 @@ def process_packet(packet):
             .field("psh", flags["P"]) \
             .field("urg", flags["U"]) \
             .time(timestamp_ns)
-        
+
         try:
             write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
             write_ratio_metric(timestamp_ns)
@@ -88,6 +116,11 @@ def process_packet(packet):
         except Exception as e:
             print(f"InfluxDB write error: {e}")
 
-ifaces = get_if_list()
-print(f"Starting Scapy Sniffer — interfaces: {ifaces}  filter: {CAPTURE_FILTER}")
+
+# ── Start sniffing on ACTIVE interfaces only ──────────────────
+ifaces = get_active_interfaces()
+print(f"All interfaces    : {get_if_list()}")
+print(f"Active interfaces : {ifaces}")
+print(f"Capture filter    : {CAPTURE_FILTER}")
+print(f"DoS threshold     : SYN/ACK ratio >= {DOS_RATIO_THRESHOLD}  (window={SYN_ACK_WINDOW} packets)")
 sniff(filter=CAPTURE_FILTER, iface=ifaces, prn=process_packet, store=False)
