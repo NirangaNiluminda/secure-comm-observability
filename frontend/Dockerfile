@@ -22,6 +22,6 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Our custom nginx config (proxies /api + /socket.io to backend)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 80
+EXPOSE 80 443
 
 CMD ["nginx", "-g", "daemon off;"]

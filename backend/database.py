@@ -16,16 +16,24 @@ def get_connection():
 
 
 def init_db():
-    """Create tables on first run."""
+    """Create tables on first run. Also migrates existing DBs."""
     with get_connection() as conn:
         conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                username      TEXT    UNIQUE NOT NULL,
-                password_hash BLOB    NOT NULL,
-                created_at    TEXT    DEFAULT (datetime('now'))
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                username           TEXT    UNIQUE NOT NULL,
+                password_hash      BLOB    NOT NULL,
+                ecdsa_identity_pub TEXT    DEFAULT NULL,   -- JWK JSON, stored at registration
+                created_at         TEXT    DEFAULT (datetime('now'))
             )
         ''')
+        # ── Migration: add column to pre-existing databases ──────────────
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN ecdsa_identity_pub TEXT DEFAULT NULL')
+            conn.commit()
+            print('[DB] Migrated: added ecdsa_identity_pub column')
+        except Exception:
+            pass  # Column already exists — normal on every run after first migration
         conn.execute('''
             CREATE TABLE IF NOT EXISTS security_events (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,13 +50,19 @@ def init_db():
 
 # ── User helpers ─────────────────────────────────────────────
 
-def create_user(username: str, password_hash: bytes) -> bool:
-    """Insert a new user. Returns False if username already taken."""
+def create_user(username: str, password_hash: bytes,
+                ecdsa_identity_pub: str | None = None) -> bool:
+    """Insert a new user. Returns False if username already taken.
+
+    ecdsa_identity_pub: canonical JSON string of the ECDSA P-256 public key JWK.
+    Stored at registration so /api/auth/complete can verify the challenge
+    signature against a pre-registered key — not a key submitted at login time.
+    """
     try:
         with get_connection() as conn:
             conn.execute(
-                'INSERT INTO users (username, password_hash) VALUES (?, ?)',
-                (username, password_hash)
+                'INSERT INTO users (username, password_hash, ecdsa_identity_pub) VALUES (?, ?, ?)',
+                (username, password_hash, ecdsa_identity_pub)
             )
             conn.commit()
         return True

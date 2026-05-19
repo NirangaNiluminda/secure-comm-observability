@@ -108,3 +108,24 @@ def verify_ecdsa(public_key, signature: bytes, data: bytes) -> None:
     if len(signature) == 64 and signature[0] != 0x30:
         signature = _p1363_to_der(signature)
     public_key.verify(signature, data, ec.ECDSA(hashes.SHA256()))
+
+
+# ── Key export ────────────────────────────────────────────────
+
+def public_key_to_jwk(public_key) -> dict:
+    """
+    Export an EC P-256 public key as a JWK dict compatible with Web Crypto API.
+    Used to expose the server's ECDSA public key so browsers can verify key certs.
+    """
+    nums = public_key.public_numbers()
+
+    def _int_to_b64url(n: int, length: int = 32) -> str:
+        b = n.to_bytes(length, 'big')
+        return base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+
+    return {
+        'kty': 'EC',
+        'crv': 'P-256',
+        'x':   _int_to_b64url(nums.x),
+        'y':   _int_to_b64url(nums.y),
+    }

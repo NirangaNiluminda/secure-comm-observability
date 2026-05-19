@@ -63,6 +63,11 @@ rate_limit_lock   = threading.Lock()
 audit_lock        = threading.Lock()
 session_keys_lock = threading.Lock()
 
+# Challenge-Response: ephemeral per-login challenges
+# { challenge_id: {username, challenge_bytes, expires_at, ip} }
+pending_challenges: dict = {}
+pending_challenges_lock  = threading.Lock()
+
 # ─────────────────────────────────────────────────────────────
 # Audit log (hash-chained, ECDSA-signed)
 # ─────────────────────────────────────────────────────────────
@@ -223,6 +228,10 @@ def http_register():
     data     = request.get_json(silent=True) or {}
     username = (data.get('username') or '').strip()
     password = (data.get('password') or '').strip()
+    # ecdsaIdentityPubJwk: the ECDSA P-256 public key generated in the browser.
+    # Stored here so the server can verify future login challenges against THIS
+    # specific key — not whatever key the client submits at login time.
+    ecdsa_identity_pub_jwk = data.get('ecdsaIdentityPubJwk')
 
     if not username or not password:
         return jsonify({'error': 'Username and password are required'}), 400
@@ -230,12 +239,19 @@ def http_register():
         return jsonify({'error': 'Username must be 3–32 characters'}), 400
     if len(password) < 6:
         return jsonify({'error': 'Password must be at least 6 characters'}), 400
+    if not ecdsa_identity_pub_jwk or not isinstance(ecdsa_identity_pub_jwk, dict):
+        return jsonify({'error': 'ECDSA identity public key (ecdsaIdentityPubJwk) is required'}), 400
+    if ecdsa_identity_pub_jwk.get('kty') != 'EC' or ecdsa_identity_pub_jwk.get('crv') != 'P-256':
+        return jsonify({'error': 'Identity key must be an EC P-256 JWK'}), 400
     if db.username_exists(username):
         return jsonify({'error': 'Username already taken'}), 409
 
     hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
-    db.create_user(username, hashed)
-    _append_audit_log('account_created', {'username': username, 'ip': _client_ip()})
+    # Serialise to canonical JSON (sort_keys ensures identical string every time)
+    identity_pub_str = json.dumps(ecdsa_identity_pub_jwk, sort_keys=True, separators=(',', ':'))
+    db.create_user(username, hashed, ecdsa_identity_pub=identity_pub_str)
+    _append_audit_log('account_created', {'username': username, 'ip': _client_ip(),
+                                          'identity_key_registered': True})
     return jsonify({'success': True, 'message': 'Account created. You can now log in.'}), 201
 
 
@@ -277,6 +293,164 @@ def http_login():
     token = generate_jwt(username)
     _append_audit_log('login_success', {'username': username, 'ip': _client_ip()})
     return jsonify({'token': token, 'username': username}), 200
+
+# ─────────────────────────────────────────────────────────────
+# HTTP: Challenge-Response authentication (GAP1 + GAP2 fix)
+# ─────────────────────────────────────────────────────────────
+
+@app.route('/api/auth/challenge', methods=['POST'])
+def http_auth_challenge():
+    """
+    Challenge-Response Step 1 — verify password credentials and issue a one-time challenge.
+
+    Flow:
+      1. Client POSTs {username, password}
+      2. Server verifies password (bcrypt), then returns a 32-byte random challenge
+      3. Client signs the raw challenge bytes with its ECDSA private key
+      4. Client completes login via /api/auth/complete
+    """
+    ip   = _client_ip()
+    ok, retry = _check_rate_limit('login', ip, RATE_LIMIT_REGISTER_PER_WINDOW)
+    if not ok:
+        _append_audit_log('attack_brute_force_blocked', {
+            'ip': ip, 'reason': 'rate_limit_exceeded', 'retry_after': retry,
+        })
+        return jsonify({'error': f'Too many attempts. Retry after {retry}s.', 'retry_after': retry}), 429
+
+    data     = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    password = (data.get('password') or '').strip()
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    user = db.get_user(username)
+    if not user:
+        bcrypt.checkpw(b'dummy', bcrypt.hashpw(b'dummy', bcrypt.gensalt()))  # constant-time
+        _append_audit_log('login_failed', {'username': username, 'ip': ip, 'reason': 'user_not_found'})
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    stored = user['password_hash']
+    if isinstance(stored, str):
+        stored = stored.encode()
+    if not bcrypt.checkpw(password.encode(), stored):
+        _append_audit_log('login_failed', {'username': username, 'ip': ip, 'reason': 'wrong_password'})
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    # Password verified — issue a one-time 32-byte challenge
+    challenge_id    = base64.urlsafe_b64encode(os.urandom(16)).decode().rstrip('=')
+    challenge_bytes = os.urandom(32)
+    challenge_b64   = base64.b64encode(challenge_bytes).decode()
+
+    now = time.time()
+    with pending_challenges_lock:
+        # Prune expired entries to prevent unbounded memory growth
+        expired = [k for k, v in pending_challenges.items() if v['expires_at'] < now]
+        for k in expired:
+            del pending_challenges[k]
+        pending_challenges[challenge_id] = {
+            'username':   username,
+            'challenge':  challenge_bytes,
+            'expires_at': now + 60,    # 60-second one-time-use window
+            'ip':         ip,
+        }
+
+    return jsonify({'challenge': challenge_b64, 'challenge_id': challenge_id}), 200
+
+
+@app.route('/api/auth/complete', methods=['POST'])
+def http_auth_complete():
+    """
+    Challenge-Response Step 2 — verify ECDSA signature over the challenge.
+
+    Security fix: the signature is verified against the ECDSA public key that was
+    registered at account creation (stored in users.ecdsa_identity_pub), NOT against
+    a key submitted at login time. This closes the attack where an adversary who
+    knows the password could substitute their own keypair.
+
+    On success:
+      • Issues a JWT
+      • Returns a server-signed certificate for the stored identity public key
+        (server acts as a mini-CA: GAP2 fix)
+    """
+    data          = request.get_json(silent=True) or {}
+    challenge_id  = (data.get('challenge_id') or '').strip()
+    username      = (data.get('username')      or '').strip()
+    signature_b64 = (data.get('signature')     or '').strip()
+
+    if not all([challenge_id, username, signature_b64]):
+        return jsonify({'error': 'Missing required fields: challenge_id, username, signature'}), 400
+
+    # Consume challenge atomically (one-time use)
+    with pending_challenges_lock:
+        entry = pending_challenges.pop(challenge_id, None)
+
+    if entry is None or time.time() > entry['expires_at']:
+        return jsonify({'error': 'Challenge expired or not found — please log in again'}), 401
+    if entry['username'] != username:
+        return jsonify({'error': 'Username mismatch'}), 401
+
+    # ── Fetch stored identity key — this is the fix ───────────────────────────
+    # We verify against the key stored at registration, not any key submitted now.
+    # An attacker who knows the password still cannot log in unless they also
+    # hold the private key whose public half was registered at account creation.
+    user = db.get_user(username)
+    stored_jwk_str = user.get('ecdsa_identity_pub') if user else None
+    if not stored_jwk_str:
+        _append_audit_log('login_failed', {'username': username, 'ip': entry['ip'],
+                                           'reason': 'no_identity_key_registered'})
+        return jsonify({
+            'error': 'No identity key registered for this account. '
+                     'Please re-register to bind an identity key to your account.'
+        }), 401
+
+    ecdsa_pub_jwk = json.loads(stored_jwk_str)
+
+    # ── Verify ECDSA signature over raw challenge bytes ───────────────────────
+    try:
+        sig_bytes  = base64.b64decode(signature_b64)
+        client_pub = crypto.load_public_key_from_jwk(ecdsa_pub_jwk)
+        # verify_ecdsa handles both DER (Python) and P1363 (Web Crypto) formats
+        crypto.verify_ecdsa(client_pub, sig_bytes, entry['challenge'])
+    except Exception as exc:
+        _append_audit_log('login_failed', {
+            'username': username, 'ip': entry['ip'],
+            'reason':   f'challenge_signature_invalid: {type(exc).__name__}',
+        })
+        return jsonify({'error': 'Challenge signature verification failed — wrong private key'}), 401
+
+    # ── Issue JWT ─────────────────────────────────────────────────────────────
+    token = generate_jwt(username)
+
+    # ── Issue server-signed key certificate (GAP2) ────────────────────────────
+    # Signs the STORED identity key (not a submitted one).
+    # Now the cert genuinely means: "server vouches this key belongs to <username>"
+    canonical_jwk   = json.dumps(ecdsa_pub_jwk, sort_keys=True, separators=(',', ':'))
+    server_cert_der = audit_private_key.sign(canonical_jwk.encode('utf-8'), ec.ECDSA(hashes.SHA256()))
+    server_cert_b64 = base64.b64encode(server_cert_der).decode()
+
+    _append_audit_log('login_success', {
+        'username': username, 'ip': entry['ip'],
+        'method': 'challenge_response_stored_identity_key',
+    })
+
+    return jsonify({
+        'token':            token,
+        'username':         username,
+        'server_key_cert':  server_cert_b64,   # DER sig over STORED identity key
+        'ecdsa_public_key': ecdsa_pub_jwk,     # echo stored key back — client uses for signing
+    }), 200
+
+
+@app.route('/api/server/pubkey', methods=['GET'])
+def http_server_pubkey():
+    """
+    Expose server's ECDSA public key as JWK so clients can verify key certificates.
+    Browsers import this key and call SubtleCrypto.verify() against server_key_cert.
+    """
+    server_jwk = crypto.public_key_to_jwk(audit_private_key.public_key())
+    return jsonify({'server_pubkey_jwk': server_jwk})
+
 
 # ─────────────────────────────────────────────────────────────
 # HTTP: DoS flood-test endpoint (rate-limited — used by DoS attack demo)
@@ -873,7 +1047,12 @@ def handle_register(data):
         emit('auth_error', {'error': 'Missing public keys'})
         return
 
-    users[username] = {'sid': request.sid, 'public_key': public_key, 'sign_public_key': sign_public_key}
+    users[username] = {
+        'sid':            request.sid,
+        'public_key':     public_key,
+        'sign_public_key': sign_public_key,
+        'server_key_cert': data.get('server_key_cert', ''),  # server cert from /api/auth/complete
+    }
     emit('registered', {'token': token, 'username': username})
     emit('user_list', list(users.keys()), broadcast=True)
     _append_audit_log('chat_joined', {'username': username, 'sid': request.sid, 'ip': _client_ip()})
@@ -887,7 +1066,11 @@ def get_public_key(data):
         return {'error': 'Unknown requester'}
     target = data.get('username')
     if target in users:
-        return {'public_key': users[target]['public_key'], 'sign_public_key': users[target]['sign_public_key']}
+        return {
+            'public_key':      users[target]['public_key'],
+            'sign_public_key': users[target]['sign_public_key'],
+            'server_key_cert': users[target].get('server_key_cert', ''),
+        }
     return {'error': 'User not found'}
 
 

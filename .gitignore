@@ -28,6 +28,12 @@ backend/audit_chain_state.json
 backend/audit_signing_key.pem
 backend/audit_signing_public.pem
 
+# TLS private keys — NEVER commit these
+certs/*.key
+certs/*.csr
+certs/*.srl
+# certs/*.crt and certs/*.cnf are safe to commit (public / config)
+
 # OS files
 .DS_Store
 Thumbs.db

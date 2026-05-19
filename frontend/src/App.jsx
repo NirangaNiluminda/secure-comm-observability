@@ -13,7 +13,10 @@ import {
   generateECDHKeyPair, generateECDSAKeyPair, exportKey,
   importECDHPublicKey, importECDSAPublicKey, deriveSharedKey,
   encryptMessage, decryptMessage, signMessage, verifySignature,
-  generateHash, generateMessageId, buildSignedEnvelope
+  generateHash, generateMessageId, buildSignedEnvelope,
+  signBytes, computeSafetyNumber, verifyServerKeyCert,
+  base64ToArrayBuffer, arrayBufferToBase64,
+  saveIdentityKeyPair, loadIdentityKeyPair,
 } from './crypto';
 
 const SOCKET_SERVER_URL = window.location.origin;
@@ -104,17 +107,34 @@ function AuthScreen({ onAuthenticated }) {
     if (password.length < 6) return setError('Password must be at least 6 characters');
     setLoading(true);
     try {
+      // ── Generate ECDSA identity keypair ─────────────────────────────────────
+      // This keypair is created ONCE at registration.  The public half is stored
+      // on the server so future logins can verify the challenge signature against
+      // a pre-registered key — not whatever key the client submits at login time.
+      setSuccess('Generating identity key…');
+      const identityKeys   = await generateECDSAKeyPair();
+      const identityPubJwk = await exportKey(identityKeys.publicKey);
+
+      // ── Register with server ─────────────────────────────────────────────────
+      setSuccess('Creating account…');
       const res = await fetch(`${API_BASE}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, ecdsaIdentityPubJwk: identityPubJwk }),
       });
       const d = await res.json();
       if (!res.ok) return setError(d.error || 'Registration failed');
-      setSuccess('Account created! Redirecting to login…');
-      setTimeout(() => { setTab('login'); setSuccess(''); setPassword(''); setConfirm(''); }, 1600);
-    } catch { setError('Cannot reach server. Is the backend running?'); }
-    finally { setLoading(false); }
+
+      // ── Save identity keypair to IndexedDB ───────────────────────────────────
+      // Private key stays in the browser — only the public half went to the server.
+      // Keyed by username so multiple accounts can share a browser.
+      await saveIdentityKeyPair(username, identityKeys);
+
+      setSuccess('Account created! Identity key saved to this browser.');
+      setTimeout(() => { setTab('login'); setSuccess(''); setPassword(''); setConfirm(''); }, 2000);
+    } catch (err) {
+      setError('Cannot reach server. Is the backend running?');
+    } finally { setLoading(false); }
   };
 
   const handleLogin = async (e) => {
@@ -122,16 +142,60 @@ function AuthScreen({ onAuthenticated }) {
     setError(''); setSuccess('');
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/login`, {
+      // ── Step 0a: load identity keypair from IndexedDB ───────────────────
+      // The identity key was generated and saved during registration.
+      // We load it here to sign the server challenge.
+      // Private key never leaves the browser — it was never transmitted.
+      setSuccess('Loading identity key…');
+      const identityKeys = await loadIdentityKeyPair(username);
+      if (!identityKeys) {
+        setSuccess('');
+        return setError(
+          'No identity key found for this account in this browser. ' +
+          'Identity keys are device-specific — please re-register, or use the browser you registered with.'
+        );
+      }
+
+      // ── Step 0b: generate fresh ECDH keypair for this session (PFS) ─────
+      // New ECDH key every login → past sessions cannot be decrypted even if
+      // this session key is later compromised (Perfect Forward Secrecy).
+      const ecdhKeys = await generateECDHKeyPair();
+
+      // ── Step 1: verify password → receive one-time challenge ─────────────
+      setSuccess('Verifying credentials…');
+      const r1 = await fetch(`${API_BASE}/api/auth/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      const d = await res.json();
-      if (!res.ok) return setError(d.error || 'Login failed');
-      onAuthenticated(d.token, d.username);
-    } catch { setError('Cannot reach server. Is the backend running?'); }
-    finally { setLoading(false); }
+      const d1 = await r1.json();
+      if (!r1.ok) { setSuccess(''); return setError(d1.error || 'Login failed'); }
+
+      // ── Step 2: sign the challenge with the IDENTITY private key ─────────
+      // Server will verify against the stored public key — not whatever we
+      // submit here. Mallory with Alice's password still can't log in because
+      // she doesn't hold the private key registered at account creation.
+      setSuccess('Signing challenge with identity key…');
+      const challengeBytes = base64ToArrayBuffer(d1.challenge);
+      const signatureB64   = await signBytes(identityKeys.privateKey, challengeBytes);
+
+      // ── Step 3: submit signature → receive JWT + server key certificate ──
+      // Note: ecdsa_public_key is no longer sent — server uses the stored key.
+      setSuccess('Completing authentication…');
+      const r2 = await fetch(`${API_BASE}/api/auth/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge_id: d1.challenge_id, username, signature: signatureB64 }),
+      });
+      const d2 = await r2.json();
+      if (!r2.ok) { setSuccess(''); return setError(d2.error || 'Authentication failed'); }
+
+      // identityKeys used as the ECDSA keys for message signing too (same key)
+      onAuthenticated(d2.token, d2.username, { ecdh: ecdhKeys, ecdsa: identityKeys }, d2.server_key_cert);
+    } catch (err) {
+      setSuccess('');
+      setError('Cannot reach server. Is the backend running?');
+    } finally { setLoading(false); }
   };
 
   const securityItems = [
@@ -300,7 +364,9 @@ function AuthScreen({ onAuthenticated }) {
 
               {/* Footer note */}
               <p className="text-center text-[11px] text-slate-600 mt-4">
-                Keys are generated locally — your private key never leaves this device
+                {tab === 'login'
+                  ? 'Password + Challenge-Response · private key never leaves this device'
+                  : 'Keys are generated locally — your private key never leaves this device'}
               </p>
             </div>
           </div>
@@ -470,7 +536,7 @@ function MessageBubble({ msg, isMine, expanded, onToggleExpand }) {
 // Main Chat App
 // ─────────────────────────────────────────────────────────────
 
-function ChatApp({ token, username, onLogout, embedded = false }) {
+function ChatApp({ token, username, onLogout, embedded = false, keysPregenerated = null, serverKeyCert = null }) {
   const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
   const [users, setUsers] = useState([]);
@@ -482,23 +548,45 @@ function ChatApp({ token, username, onLogout, embedded = false }) {
   const [keys, setKeys] = useState(null);
   const [tamperMode, setTamperMode] = useState(false);
   const [expandedMsg, setExpandedMsg] = useState(null);
+  const [showSafetyPanel, setShowSafetyPanel] = useState(false);
 
-  const sessionsRef = useRef({});
-  const keysRef = useRef(null);
-  const tokenRef = useRef(token);
-  const usernameRef = useRef(username);
-  const seenIdsRef = useRef(new Set());
-  const bottomRef = useRef(null);
+  const sessionsRef       = useRef({});
+  const keysRef           = useRef(null);
+  const tokenRef          = useRef(token);
+  const usernameRef       = useRef(username);
+  const seenIdsRef        = useRef(new Set());
+  const bottomRef         = useRef(null);
+  const serverPubJwkRef   = useRef(null);   // server's ECDSA public key (JWK)
+  const serverKeyCertRef  = useRef(serverKeyCert); // my own server-signed cert
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // Generate ephemeral key pairs on mount
+  // Use pre-generated keys from login flow, or generate new ones if not available
+  // (fallback for direct access without challenge-response)
   useEffect(() => {
+    if (keysPregenerated) {
+      setKeys(keysPregenerated);
+      keysRef.current = keysPregenerated;
+      return;
+    }
     (async () => {
-      const ecdhKeys = await generateECDHKeyPair();
+      const ecdhKeys  = await generateECDHKeyPair();
       const ecdsaKeys = await generateECDSAKeyPair();
       const k = { ecdh: ecdhKeys, ecdsa: ecdsaKeys };
       setKeys(k); keysRef.current = k;
+    })();
+  }, []);
+
+  // Fetch server's ECDSA public key once (needed to verify peer key certificates)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/server/pubkey`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const d = await res.json();
+        if (d.server_pubkey_jwk) serverPubJwkRef.current = d.server_pubkey_jwk;
+      } catch { /* non-fatal — cert verification will show as unverified */ }
     })();
   }, []);
 
@@ -513,9 +601,14 @@ function ChatApp({ token, username, onLogout, embedded = false }) {
 
     sock.on('connect', async () => {
       setConnected(true);
-      const exportedEcdh = await exportKey(keys.ecdh.publicKey);
+      const exportedEcdh  = await exportKey(keys.ecdh.publicKey);
       const exportedEcdsa = await exportKey(keys.ecdsa.publicKey);
-      sock.emit('register', { token, public_key: exportedEcdh, sign_public_key: exportedEcdsa });
+      sock.emit('register', {
+        token,
+        public_key:      exportedEcdh,
+        sign_public_key: exportedEcdsa,
+        server_key_cert: serverKeyCertRef.current || '',  // server-signed cert from login
+      });
     });
     sock.on('disconnect', () => setConnected(false));
     sock.on('registered', () => setErrorBanner(''));
@@ -568,10 +661,41 @@ function ChatApp({ token, username, onLogout, embedded = false }) {
       sock.emit('get_public_key', { username: targetUser, token: tokenRef.current }, async (res) => {
         if (!res || res.error) { reject(new Error(res?.error || 'Key lookup failed')); return; }
         try {
-          const theirEcdhPub = await importECDHPublicKey(res.public_key);
+          const theirEcdhPub  = await importECDHPublicKey(res.public_key);
           const theirEcdsaPub = await importECDSAPublicKey(res.sign_public_key);
-          const sharedKey = await deriveSharedKey(keysRef.current.ecdh.privateKey, theirEcdhPub);
-          const session = { targetUser, sharedKey, ecdsaPublicKey: theirEcdsaPub };
+          const sharedKey     = await deriveSharedKey(keysRef.current.ecdh.privateKey, theirEcdhPub);
+
+          // ── GAP2: Verify server certificate on peer's ECDSA key ───────────
+          // server_key_cert = server's ECDSA signature over canonical(peer.sign_public_key)
+          // If valid → server has vouched for this key → MITM would need to break server
+          let certVerified = false;
+          try {
+            if (res.server_key_cert && serverPubJwkRef.current) {
+              certVerified = await verifyServerKeyCert(
+                serverPubJwkRef.current,
+                res.server_key_cert,
+                res.sign_public_key,
+              );
+            }
+          } catch { /* non-fatal: certVerified stays false */ }
+
+          // ── GAP3: Compute Safety Number for out-of-band verification ──────
+          // SHA-256(sort(myEcdsaKey, theirEcdsaKey)) displayed as digit groups
+          // Both chat partners see the same number — MITM would produce a different one
+          let safetyNumber = '';
+          try {
+            const myEcdsaPubJwk = await exportKey(keysRef.current.ecdsa.publicKey);
+            safetyNumber = await computeSafetyNumber(myEcdsaPubJwk, res.sign_public_key);
+          } catch { /* non-fatal */ }
+
+          const session = {
+            targetUser,
+            sharedKey,
+            ecdsaPublicKey: theirEcdsaPub,
+            certVerified,               // did server vouch for this key?
+            safetyNumber,               // fingerprint for out-of-band verification
+            theirSignPubJwk: res.sign_public_key,
+          };
           sessionsRef.current[targetUser] = session;
           resolve(session);
         } catch (err) { reject(err); }
@@ -727,29 +851,97 @@ function ChatApp({ token, username, onLogout, embedded = false }) {
         {selectedUser ? (
           <>
             {/* Chat header */}
-            <div className="flex-shrink-0 h-[60px] flex items-center justify-between px-5 border-b border-slate-800/60"
+            <div className="flex-shrink-0 border-b border-slate-800/60"
               style={{ background: 'rgba(15,23,42,0.7)', backdropFilter: 'blur(12px)' }}>
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center font-bold text-emerald-400">
-                  {selectedUser.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <p className="font-semibold text-white text-sm">{selectedUser}</p>
-                  <div className="flex items-center gap-1.5">
-                    <Lock className="w-2.5 h-2.5 text-emerald-500" />
-                    <span className="text-[10px] text-emerald-500">
-                      {activeSession ? 'E2EE Session Active · ECDH P-256 + AES-256-GCM' : 'Establishing secure channel…'}
-                    </span>
+              <div className="h-[60px] flex items-center justify-between px-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center font-bold text-emerald-400">
+                    {selectedUser.charAt(0).toUpperCase()}
                   </div>
+                  <div>
+                    <p className="font-semibold text-white text-sm">{selectedUser}</p>
+                    <div className="flex items-center gap-1.5">
+                      <Lock className="w-2.5 h-2.5 text-emerald-500" />
+                      <span className="text-[10px] text-emerald-500">
+                        {activeSession ? 'E2EE · ECDH P-256 · AES-256-GCM · Challenge-Response' : 'Establishing secure channel…'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Safety Numbers toggle */}
+                  {activeSession && (
+                    <button
+                      onClick={() => setShowSafetyPanel(v => !v)}
+                      title="Safety Numbers — compare with your contact to verify no MITM"
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-all ${
+                        showSafetyPanel
+                          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                          : activeSession.certVerified
+                            ? 'bg-slate-800/60 border-slate-700/40 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/30'
+                            : 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400'
+                      }`}>
+                      <Hash className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline font-medium">
+                        {activeSession.certVerified ? 'Certified' : 'Unverified'}
+                      </span>
+                    </button>
+                  )}
+
+                  <AnimatePresence>
+                    {errorBanner && (
+                      <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
+                        className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-300 text-xs px-3 py-1.5 rounded-lg max-w-xs">
+                        <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span className="truncate">{errorBanner}</span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               </div>
 
+              {/* ── Safety Numbers / Key Certificate panel ─────────────────── */}
               <AnimatePresence>
-                {errorBanner && (
-                  <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
-                    className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-300 text-xs px-3 py-1.5 rounded-lg max-w-xs">
-                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="truncate">{errorBanner}</span>
+                {showSafetyPanel && activeSession && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    style={{ overflow: 'hidden' }}>
+                    <div className="px-5 py-3 border-t border-slate-800/60 space-y-3">
+                      {/* Server Key Certificate status (GAP2) */}
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className={`w-4 h-4 flex-shrink-0 ${activeSession.certVerified ? 'text-emerald-400' : 'text-yellow-400'}`} />
+                        <div>
+                          <span className="text-xs font-semibold text-slate-200">Server Key Certificate</span>
+                          <span className={`ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                            activeSession.certVerified
+                              ? 'bg-emerald-500/15 text-emerald-400'
+                              : 'bg-yellow-500/15 text-yellow-400'
+                          }`}>
+                            {activeSession.certVerified
+                              ? `✓ ${selectedUser}'s key is server-certified`
+                              : `⚠ key unverified — logged in without challenge-response`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Safety Number (GAP3) */}
+                      <div>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <Hash className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                          <span className="text-xs font-semibold text-slate-200">Safety Number</span>
+                          <span className="text-[10px] text-slate-500">— compare out-of-band with {selectedUser}</span>
+                        </div>
+                        <p className="font-mono text-sm text-emerald-400 tracking-wider leading-relaxed break-all">
+                          {activeSession.safetyNumber || 'Computing…'}
+                        </p>
+                        <p className="text-[10px] text-slate-600 mt-1">
+                          SHA-256({username} key ‖ {selectedUser} key) · If this number matches on both devices, no MITM is present
+                        </p>
+                      </div>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -840,7 +1032,7 @@ function ChatApp({ token, username, onLogout, embedded = false }) {
 // Top navigation shell (wraps Chat + Dashboard)
 // ─────────────────────────────────────────────────────────────
 
-function AppShell({ token, username, onLogout }) {
+function AppShell({ token, username, onLogout, keysPregenerated = null, serverKeyCert = null }) {
   const [page, setPage] = useState('chat');
 
   return (
@@ -893,7 +1085,14 @@ function AppShell({ token, username, onLogout }) {
       {/* Page content */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
         {page === 'chat'
-          ? <ChatApp token={token} username={username} onLogout={onLogout} embedded />
+          ? <ChatApp
+              token={token}
+              username={username}
+              onLogout={onLogout}
+              embedded
+              keysPregenerated={keysPregenerated}
+              serverKeyCert={serverKeyCert}
+            />
           : <Dashboard token={token} />
         }
       </div>
@@ -906,8 +1105,16 @@ function AppShell({ token, username, onLogout }) {
 // ─────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [auth, setAuth] = useState({ token: null, username: null });
+  const [auth, setAuth] = useState({ token: null, username: null, keys: null, serverKeyCert: null });
+  const clearAuth = () => setAuth({ token: null, username: null, keys: null, serverKeyCert: null });
   return auth.token
-    ? <AppShell token={auth.token} username={auth.username} onLogout={() => setAuth({ token: null, username: null })} />
-    : <AuthScreen onAuthenticated={(token, username) => setAuth({ token, username })} />;
+    ? <AppShell
+        token={auth.token}
+        username={auth.username}
+        keysPregenerated={auth.keys}
+        serverKeyCert={auth.serverKeyCert}
+        onLogout={clearAuth}
+      />
+    : <AuthScreen onAuthenticated={(token, username, keys, serverKeyCert) =>
+        setAuth({ token, username, keys, serverKeyCert })} />;
 }

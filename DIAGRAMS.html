@@ -235,9 +235,11 @@
 
   <div class="group-label">Architecture</div>
   <a href="#arch">    <div class="dot" style="background:#3b82f6"></div> System Architecture</a>
+  <a href="#tls">     <div class="dot" style="background:#06b6d4"></div> TLS Transport Security (NEW)</a>
 
   <div class="group-label">Normal Flows</div>
   <a href="#auth">    <div class="dot" style="background:#10b981"></div> Authentication Flow</a>
+  <a href="#mutualauth"><div class="dot" style="background:#10b981"></div> Mutual Auth (NEW)</a>
   <a href="#ecdh">    <div class="dot" style="background:#6366f1"></div> ECDH Key Exchange</a>
   <a href="#e2ee">    <div class="dot" style="background:#10b981"></div> Secure Message Flow</a>
 
@@ -251,7 +253,7 @@
 
   <div class="group-label">Evidence & Coverage</div>
   <a href="#audit">   <div class="dot" style="background:#f59e0b"></div> Audit Log Chain</a>
-  <a href="#defenses"><div class="dot" style="background:#10b981"></div> All 8 Defense Layers</a>
+  <a href="#defenses"><div class="dot" style="background:#10b981"></div> All 14 Defense Layers</a>
   <a href="#stride">  <div class="dot" style="background:#8b5cf6"></div> STRIDE Threat Model</a>
 </nav>
 
@@ -260,7 +262,7 @@
 
   <div class="page-header">
     <h1>🔐 SecureComm — System & Security Diagrams</h1>
-    <p>Visual walkthrough of the architecture, cryptographic flows, all 6 attack simulations, and how each defense mechanism responds. Open in any modern browser — diagrams render automatically.</p>
+    <p>Visual walkthrough of the architecture, cryptographic flows, TLS transport security, full mutual authentication (Challenge-Response · Server Key Certificates · Safety Numbers), all 6 attack simulations, and how each defense mechanism responds. Open in any modern browser — diagrams render automatically.</p>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════
@@ -271,7 +273,7 @@
       <div class="section-icon icon-arch">🏗️</div>
       <div>
         <h2>System Architecture</h2>
-        <p>All Docker containers, services, and data paths. The Nginx reverse-proxy sits in front — it routes /api/* to Flask and /socket.io/* to SocketIO. The Scapy sniffer runs on the host OS with NET_RAW capability and writes to InfluxDB.</p>
+        <p>All Docker containers, services, and data paths. Nginx terminates TLS (HTTPS :8443) and redirects plain HTTP :8080 → HTTPS. It proxies <code>/api/*</code> and <code>/socket.io/*</code> to Flask over the internal Docker network. The Scapy sniffer runs on the host OS with NET_RAW capability and writes to InfluxDB.</p>
       </div>
     </div>
 
@@ -284,16 +286,17 @@ graph TB
     end
 
     subgraph DOCKER["🐳  Docker Compose — securechat-net"]
-        subgraph FE["  frontend  :80  "]
-            NGINX["Nginx Reverse Proxy\nserves React SPA\nproxies /api/ and /socket.io/"]
+        subgraph FE["  frontend  :8080 (HTTP→HTTPS redirect) · :8443 (HTTPS/TLS)  "]
+            NGINX["Nginx TLS Termination\nserves React SPA\nproxies /api/ and /socket.io/\nHTTP 80 → redirects to HTTPS 443"]
+            CERT["TLS Certificate\ncerts/server.crt\nSigned by Local CA\nSAN: localhost · 127.0.0.1\nTLS 1.2 / 1.3 only"]
         end
 
-        subgraph BE["  backend  :5000  "]
-            FLASK["Flask REST API\n/api/register  /api/login\n/api/flood-test  /api/audit\n/api/attack/simulate"]
-            SOCK["Flask-SocketIO\nregister · send_message\nget_public_key · handshake"]
+        subgraph BE["  backend  :5001  "]
+            FLASK["Flask REST API\n/api/register  /api/login\n/api/auth/challenge  /api/auth/complete\n/api/server/pubkey\n/api/flood-test  /api/audit\n/api/attack/simulate"]
+            SOCK["Flask-SocketIO\nregister(+server_key_cert)\nsend_message · get_public_key\nhandshake"]
             RATE["Rate Limiter\nSliding-window deque\n15 logins · 120 msgs · 40 connects / 60s"]
-            CRYPTOMOD["crypto.py\nECDH P-256 · ECDSA P-256\nAES-256-GCM · HKDF-SHA256"]
-            AUDITMOD["Audit Logger\nSHA-256 hash chain\nECDSA-signed entries"]
+            CRYPTOMOD["crypto.py\nECDH P-256 · ECDSA P-256\nAES-256-GCM · HKDF-SHA256\npublic_key_to_jwk()"]
+            AUDITMOD["Audit Logger + Mini-CA\nSHA-256 hash chain\nECDSA-signed entries\nSigns user key certs"]
         end
 
         subgraph STORE["  Persistent Storage  "]
@@ -302,8 +305,8 @@ graph TB
         end
 
         subgraph MON["  Monitoring Stack  "]
-            INFLUX[("InfluxDB  :8086\nnetwork_metrics bucket\nnetwork_traffic measurement\nnetwork_anomaly measurement")]
-            GRAFANA["📊  Grafana  :3000\nPacket Size Distribution\nSYN/ACK Ratio — DoS Detection\nDoS Alerts panel"]
+            INFLUX[("InfluxDB  :8087\nnetwork_metrics bucket\nnetwork_traffic measurement\nnetwork_anomaly measurement")]
+            GRAFANA["📊  Grafana  :3001\nPacket Size Distribution\nSYN/ACK Ratio — DoS Detection\nDoS Alerts panel"]
         end
     end
 
@@ -311,7 +314,8 @@ graph TB
         SCAPY["Scapy Packet Sniffer\nNET_RAW · NET_ADMIN\nhost network mode\nfilter: tcp port 80"]
     end
 
-    BROWSER -->|"HTTP :80"| NGINX
+    BROWSER -->|"HTTPS :8443 (TLS 1.3)"| NGINX
+    CERT -.->|"cert + key\n(read-only mount)"| NGINX
     NGINX -->|"/api/* proxy_pass"| FLASK
     NGINX -->|"/socket.io/* proxy_pass"| SOCK
 
@@ -337,7 +341,92 @@ graph TB
     style MON     fill:#0f1a2a,stroke:#1d4ed8,color:#e2e8f0
     style HOST    fill:#1a0f0f,stroke:#7f1d1d,color:#e2e8f0
     style SCAPY   fill:#1a0f0f,stroke:#dc2626,color:#fca5a5
+    style CERT    fill:#0a2a3a,stroke:#06b6d4,color:#a5f3fc
       </pre>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       NEW: TLS TRANSPORT SECURITY
+  ══════════════════════════════════════════════════════════ -->
+  <section id="tls">
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(6,182,212,0.15)">🔒</div>
+      <div>
+        <h2>TLS Transport Security — Server Authentication to Client</h2>
+        <p>Without TLS, a network-level attacker (Trudy) can intercept all traffic <em>before</em> any application-layer crypto runs — making GAP1/2/3 useless. TLS solves this by authenticating the <strong>server to the browser</strong> using a certificate signed by a trusted Certificate Authority, before a single byte of login data is transmitted.</p>
+      </div>
+    </div>
+
+    <div class="diagram-card" style="background:rgba(6,182,212,0.06);border-color:rgba(6,182,212,0.25)">
+      <pre class="mermaid">
+sequenceDiagram
+    participant BR as Browser
+    participant T as Trudy  (Network MITM)
+    participant NGINX as Nginx  (TLS Termination)
+    participant CA as Local CA  (certs/ca.crt)
+
+    rect rgb(10, 40, 60)
+        Note over BR,CA: ── Legitimate TLS Handshake (happens BEFORE any login data) ──
+        BR->>NGINX: ClientHello  (TLS 1.3, supported cipher suites)
+        NGINX-->>BR: ServerHello + server.crt  (signed by Local CA)
+        BR->>CA: Is server.crt signed by a CA I trust?
+        CA-->>BR: ✓ Yes — cert chains to imported ca.crt
+        BR->>BR: ✓ CN/SAN matches "localhost" / "127.0.0.1"
+        BR->>BR: ✓ Cert not expired (valid until 2028)
+        Note over BR: Server identity CONFIRMED before any data sent
+        BR->>NGINX: ECDHE key exchange  (ephemeral — Perfect Forward Secrecy)
+        NGINX-->>BR: Finished  (TLS session established)
+        Note over BR,NGINX: All HTTP traffic now AES-256-GCM encrypted + authenticated
+        Note over BR,NGINX: Challenge-Response / GAP1/2/3 run safely inside this tunnel
+    end
+
+    rect rgb(80, 20, 20)
+        Note over T,NGINX: ── Trudy attempts MITM (intercepting port 8443) ──
+        BR->>T: ClientHello  (Trudy intercepts the connection)
+        T-->>BR: ServerHello + Trudy's self-signed cert
+        BR->>BR: ✗ Trudy's cert NOT signed by any trusted CA
+        Note over BR: Browser raises: NET::ERR_CERT_AUTHORITY_INVALID
+        Note over BR: Big red warning page — user cannot silently proceed
+        Note over T: Trudy cannot obtain a CA signature for localhost without the CA key
+        Note over T: MITM is BLOCKED at the transport layer — no app data ever sent
+    end
+
+    rect rgb(20, 50, 20)
+        Note over BR,CA: ── Why the Local CA model works ──
+        Note over CA: ca.key lives only on the developer's machine
+        Note over CA: Trudy has no access to ca.key → cannot forge certs
+        Note over BR: Browser imports ca.crt once → trusts all certs signed by it
+        Note over BR: For production: replace with Let's Encrypt → universally trusted
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:#06b6d4">Why TLS Comes First</div>
+        <p>The challenge-response, key certificates, and safety numbers all run <em>inside</em> the TLS tunnel. If Trudy MITMs at the network layer, she sees encrypted blobs — she cannot tamper with or read the challenge, the signature, or the key exchange.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:#06b6d4">Local CA vs Let's Encrypt</div>
+        <p>For local dev we generate a private CA (<code>certs/ca.crt</code>) and import it into the browser once. For production, replace with Let's Encrypt — free, universally trusted by all browsers, no import needed. The nginx.conf is identical; only the cert files change.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:#06b6d4">TLS 1.3 Forward Secrecy</div>
+        <p>All cipher suites use ECDHE — ephemeral Elliptic Curve Diffie-Hellman. Even if the server's private key is stolen later, past recorded TLS sessions cannot be decrypted. Combined with app-layer ECDH PFS, two independent layers of forward secrecy protect every session.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:#06b6d4">HSTS — Enforced HTTPS</div>
+        <p>Nginx sends <code>Strict-Transport-Security: max-age=31536000</code> on every HTTPS response. After the first visit, the browser refuses to connect over plain HTTP for 1 year — even if the user types <code>http://</code> manually.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:#06b6d4">Security Headers</div>
+        <p>Nginx also sends: <code>X-Frame-Options: DENY</code> (blocks clickjacking), <code>X-Content-Type-Options: nosniff</code> (blocks MIME sniffing), <code>Referrer-Policy: strict-origin-when-cross-origin</code>, <code>Permissions-Policy</code> (camera/mic/geo denied).</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:#06b6d4">Complete Trust Hierarchy</div>
+        <p>Local CA → server.crt → TLS handshake → confirmed server identity → GAP1 challenge-response → GAP2 key certificates → GAP3 safety numbers. Every layer depends on the one below it. TLS is the foundation.</p>
+      </div>
     </div>
   </section>
 
@@ -348,76 +437,177 @@ graph TB
     <div class="section-header">
       <div class="section-icon icon-auth">🔑</div>
       <div>
-        <h2>Authentication Flow — Register &amp; Login</h2>
-        <p>How user credentials are created and verified. Passwords are NEVER stored in plain text — only a bcrypt hash (60 bytes, salt embedded). JWT tokens are stateless and scoped.</p>
+        <h2>Authentication Flow — Register &amp; Challenge-Response Login</h2>
+        <p>All steps below run <strong>inside the TLS tunnel</strong>. Registration now generates and stores an ECDSA <strong>identity key</strong> bound to the account. Login verifies the challenge signature against that <strong>stored</strong> key — not a key submitted at login time. This closes the attack where an adversary with the password substitutes their own keypair.</p>
       </div>
     </div>
 
     <div class="diagram-card type-auth">
       <pre class="mermaid">
 sequenceDiagram
-    participant BR as Browser
+    participant BR as Browser  (Web Crypto API + IndexedDB)
     participant API as Flask  /api
     participant DB as SQLite  users.db
+    participant IDB as IndexedDB  (browser-persistent)
+    participant AUDIT as Audit Key  (mini-CA)
     participant JWT as JWT  HS256
 
     rect rgb(15, 40, 80)
-        Note over BR,DB: ── REGISTRATION ──
-        BR->>API: POST /api/register  {username, password}
-        API->>API: Validate: len ≥ 3, pw len ≥ 6
-        API->>API: hashed = bcrypt.hashpw(pw, gensalt(rounds=12))
-        Note over API: ~150ms intentionally — brute force defence
-        API->>DB: INSERT INTO users (username, hashed_password)
-        DB-->>API: OK  (IntegrityError if username taken)
-        API->>API: _append_audit_log("account_created")
-        API-->>BR: 201 Created  {success: true}
+        Note over BR,IDB: ── REGISTRATION — generates and binds identity key ──
+        BR->>BR: identityKeys = generateECDSAKeyPair()   P-256
+        BR->>BR: identityPubJwk = exportKey(identityKeys.publicKey)
+        Note over BR: Private key stays in browser — NEVER transmitted
+        BR->>API: POST /api/register  {username, password, ecdsaIdentityPubJwk}
+        API->>API: bcrypt.hashpw(pw, gensalt(rounds=12))   ~150ms
+        API->>DB: INSERT INTO users (username, hashed_password, ecdsa_identity_pub)
+        Note over DB: Public key stored — server now owns the reference key
+        API->>API: _append_audit_log("account_created", identity_key_registered=true)
+        API-->>BR: 201 Created
+        BR->>IDB: saveIdentityKeyPair(username, identityKeys)
+        Note over IDB: Full keypair persisted — survives tab close and browser restart
     end
 
     rect rgb(10, 50, 30)
-        Note over BR,JWT: ── LOGIN ──
-        BR->>API: POST /api/login  {username, password}
+        Note over BR,IDB: ── LOGIN — Step 0: load identity key + fresh ECDH ──
+        BR->>IDB: loadIdentityKeyPair(username)
+        IDB-->>BR: identityKeys  (generated at registration)
+        BR->>BR: ecdhKeys = generateECDHKeyPair()   fresh every session (PFS)
+        Note over BR: Identity key = stable (who you are)
+        Note over BR: ECDH key     = ephemeral (session encryption PFS)
+    end
+
+    rect rgb(10, 40, 60)
+        Note over BR,JWT: ── LOGIN — Step 1: verify password → issue challenge ──
+        BR->>API: POST /api/auth/challenge  {username, password}
         API->>API: _check_rate_limit("login", ip, 15)
-        Note over API: ⚡ Rate limit: 15 attempts per 60s per IP
-        API->>DB: SELECT * FROM users WHERE username = ?
-        alt user not found
-            API->>API: bcrypt.checkpw(dummy, dummy_hash)
-            Note over API: Dummy check: same timing as real check
-            Note over API: Prevents user enumeration attack
-            API-->>BR: 401 Invalid username or password
-        else user exists
-            API->>API: bcrypt.checkpw(password, stored_hash)
-            alt password wrong
-                API->>API: _append_audit_log("login_failed")
-                API-->>BR: 401 Invalid username or password
-            else password correct
-                API->>JWT: jwt.encode({username, scopes, exp=+60min})
-                JWT-->>API: signed HS256 token
-                API->>API: _append_audit_log("login_success")
-                API-->>BR: 200  {token, username}
-                Note over BR: Token stored in React state (memory only)
-                Note over BR: Private key NEVER leaves browser
-            end
-        end
+        API->>DB: bcrypt.checkpw(password, stored_hash)
+        note over API: Timing-safe dummy check for unknown users
+        API->>API: challenge_bytes = os.urandom(32)
+        API->>API: store challenge in pending_challenges{} with 60s TTL
+        API-->>BR: 200  {challenge: base64, challenge_id: uuid}
+    end
+
+    rect rgb(20, 50, 20)
+        Note over BR,AUDIT: ── LOGIN — Step 2: sign challenge → receive JWT + cert ──
+        BR->>BR: sig = ECDSA-sign(identityKeys.priv, challenge_bytes)
+        Note over BR: Signs with the key registered at account creation
+        BR->>API: POST /api/auth/complete  {challenge_id, username, signature}
+        Note over API: No public key submitted — server uses the stored one
+        API->>API: Consume challenge (one-time use) — reject if expired
+        API->>DB: stored_jwk = users[username].ecdsa_identity_pub
+        Note over DB: Key lookup — attacker cannot substitute a different key here
+        API->>API: verify_ecdsa(stored_jwk, sig, challenge_bytes)
+        Note over API: InvalidSignature → 401  (Mallory with Alice's password fails here)
+        API->>JWT: jwt.encode({username, scopes, exp=+60min})
+        JWT-->>API: HS256 token
+        API->>AUDIT: sign(canonical(stored_jwk))  → server_cert_der
+        Note over AUDIT: Cert is over the STORED key — genuinely binds key to username
+        API->>API: _append_audit_log("login_success", method="challenge_response_stored_identity_key")
+        API-->>BR: 200  {token, username, server_key_cert, ecdsa_public_key}
+        Note over BR: server_key_cert now genuinely proves server vouches for Alice's key
     end
       </pre>
     </div>
 
     <div class="key-points">
       <div class="kp">
-        <div class="label" style="color:var(--emerald)">bcrypt Work Factor</div>
-        <p>Cost factor 12 makes each hash ~100–150ms. Guessing 1 million passwords takes ~28 hours per CPU core.</p>
+        <div class="label" style="color:var(--emerald)">Identity Key Bound at Registration</div>
+        <p>The ECDSA public key is registered <em>before</em> any login. The server stores it in <code>users.ecdsa_identity_pub</code>. Future logins must prove possession of the matching private key — the server never trusts a key submitted at login time.</p>
       </div>
       <div class="kp">
-        <div class="label" style="color:var(--emerald)">Timing Attack Prevention</div>
-        <p>Even for non-existent users, a dummy bcrypt check runs — so attacker cannot tell if a username exists by timing the response.</p>
+        <div class="label" style="color:var(--emerald)">GAP1 Truly Fixed</div>
+        <p>Mallory knows Alice's password → requests a challenge → signs with <em>her own</em> key → submits. Server fetches Alice's <em>stored</em> key → <code>verify_ecdsa(alice_stored_key, mallory_sig)</code> → <code>InvalidSignature</code> → 401. Password alone is not enough.</p>
       </div>
       <div class="kp">
-        <div class="label" style="color:var(--blue)">JWT Scopes</div>
-        <p>Token carries scopes: <code>chat:send · chat:read · key:read</code>. Each endpoint checks the required scope before acting.</p>
+        <div class="label" style="color:var(--emerald)">GAP2 Truly Fixed</div>
+        <p>The server key certificate is now signed over the <em>stored</em> identity key — not whatever the client submitted. It genuinely means: "server vouches this specific key belongs to this username."</p>
       </div>
       <div class="kp">
-        <div class="label" style="color:var(--yellow)">Rate Limiting</div>
-        <p>15 login attempts per 60-second window per IP. The 16th attempt returns HTTP 429 Too Many Requests.</p>
+        <div class="label" style="color:var(--blue)">IndexedDB Persistence</div>
+        <p>The full ECDSA keypair is saved to <code>IndexedDB</code> under <code>identity_&lt;username&gt;</code>. CryptoKey objects are structured-cloneable — the private key survives tab close and browser restart without ever being exported or transmitted.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--purple)">Two Key Types, Two Purposes</div>
+        <p><strong>Identity key</strong> (ECDSA): stable, registered once, proves <em>who you are</em>. <strong>Session key</strong> (ECDH): ephemeral, fresh every login, proves <em>nothing about identity</em> but gives Perfect Forward Secrecy for message encryption.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Device-Specific Limitation</div>
+        <p>The private key lives in this browser's IndexedDB. Logging in from a new device requires re-registering (or implementing a key-export/import flow). For production, use platform authenticators (WebAuthn) or an encrypted key backup.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       NEW: MUTUAL AUTHENTICATION — Key Certs + Safety Numbers
+  ══════════════════════════════════════════════════════════ -->
+  <section id="mutualauth">
+    <div class="section-header">
+      <div class="section-icon icon-auth">🤝</div>
+      <div>
+        <h2>Mutual Authentication — Key Certificates &amp; Safety Numbers</h2>
+        <p>Three authentication gaps existed in the original design. All three are now closed. <strong>GAP1</strong>: client→server (challenge-response login above). <strong>GAP2</strong>: server→client key trust (server-signed key certificates). <strong>GAP3</strong>: client↔client key trust (Safety Numbers for out-of-band verification).</p>
+      </div>
+    </div>
+
+    <div class="diagram-card type-auth">
+      <pre class="mermaid">
+sequenceDiagram
+    participant A as Alice  (Browser)
+    participant S as Server  (mini-CA)
+    participant B as Bob  (Browser)
+
+    rect rgb(10, 40, 60)
+        Note over A,S: ── GAP2: Server Key Certificate — Bob verifies Alice's key ──
+        Note over A: Alice already has server_key_cert from login
+        A->>S: socket.register(jwt, ecdhPub, ecdsaPub, server_key_cert)
+        S->>S: users["alice"] = { ecdhPub, ecdsaPub, server_key_cert }
+
+        B->>S: get_public_key("alice")  [scope: key:read]
+        S-->>B: { alice.ecdhPub, alice.ecdsaPub, alice.server_key_cert }
+
+        B->>S: GET /api/server/pubkey
+        S-->>B: { server_pubkey_jwk }
+
+        B->>B: canonical = JSON.stringify(alice.ecdsaPub, sortedKeys)
+        B->>B: p1363 = derToP1363(base64decode(server_key_cert))
+        B->>B: certOK = SubtleCrypto.verify(serverKey, p1363, canonical)
+        Note over B: ✓ certOK = true → Server vouches for Alice's ECDSA key
+        Note over B: If MITM substituted a different key → cert would NOT verify
+    end
+
+    rect rgb(20, 50, 20)
+        Note over A,B: ── GAP3: Safety Numbers — out-of-band peer key verification ──
+        A->>A: myPub  = exportKey(ecdsaKeys.publicKey)
+        A->>A: strA   = "P-256:" + myPub.x + ":" + myPub.y
+        A->>A: strB   = "P-256:" + bob.ecdsaPub.x + ":" + bob.ecdsaPub.y
+        A->>A: sorted = sort([strA, strB])   (lexicographic — order-independent)
+        A->>A: hash   = SHA-256(sorted[0] + "|" + sorted[1])
+        A->>A: safetyNum = format(hash → 12 groups of 5 decimal digits)
+
+        B->>B: (identical computation with bob's and alice's keys)
+        Note over A,B: Both sides compute THE SAME number
+        Note over A,B: MITM would produce a DIFFERENT number
+        Note over A,B: Alice calls Bob → "Does yours read 12345 67890 01234…?"
+    end
+      </pre>
+    </div>
+
+    <div class="key-points">
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">What "Certified" means</div>
+        <p>When Alice sees ✓ Certified next to Bob's name, it means: the server has cryptographically signed Bob's ECDSA public key with its own private key. Bob proved he owns that key via challenge-response at login. A MITM cannot forge this without compromising the server's private key.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--emerald)">Safety Numbers (Signal model)</div>
+        <p>SHA-256 of both ECDSA public keys (sorted to be symmetric) displayed as 60 decimal digits in 12 groups of 5. Both Alice and Bob compute identical values. A MITM sees a different value — caught by a single phone call.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--blue)">DER → P1363 Conversion</div>
+        <p>Python's <code>cryptography</code> library produces DER-format ECDSA signatures. Web Crypto's <code>SubtleCrypto.verify()</code> requires P1363 (r‖s, 64 bytes). The frontend's <code>_derToP1363()</code> converts before verification.</p>
+      </div>
+      <div class="kp">
+        <div class="label" style="color:var(--yellow)">Server as Trust Anchor</div>
+        <p>This is equivalent to TLS PKI at the application layer — the server plays the role of a CA. Unlike raw TOFU (trust-on-first-use), subsequent logins always produce a server-certified key, preventing MITM even on second login.</p>
       </div>
     </div>
   </section>
@@ -429,8 +619,8 @@ sequenceDiagram
     <div class="section-header">
       <div class="section-icon icon-ecdh">🤝</div>
       <div>
-        <h2>ECDH P-256 Key Exchange — Perfect Forward Secrecy</h2>
-        <p>Both Alice and Bob generate fresh ephemeral EC key pairs every session (every page load). The shared AES key is DERIVED — never transmitted. This is called Perfect Forward Secrecy (PFS): even if a key is stolen later, past messages cannot be decrypted.</p>
+        <h2>ECDH P-256 Key Exchange — with Certificate Verification &amp; Safety Numbers</h2>
+        <p>Both Alice and Bob generate fresh ephemeral EC key pairs every session. Keys are generated <strong>before</strong> login so the ECDSA key can be used for challenge-response. The shared AES key is DERIVED — never transmitted (Perfect Forward Secrecy). On session start, each peer also verifies the server-signed certificate on the other's key and computes a Safety Number.</p>
       </div>
     </div>
 
@@ -438,43 +628,47 @@ sequenceDiagram
       <pre class="mermaid">
 sequenceDiagram
     participant A as Alice  (Browser)
-    participant S as Server  (users{})
+    participant S as Server  (users{} + mini-CA)
     participant B as Bob  (Browser)
 
     rect rgb(20, 30, 80)
-        Note over A,S: ── On Login: Alice registers her public keys ──
+        Note over A,S: ── On Login: keys generated BEFORE password submit ──
         A->>A: ecdhA  = generateECDHKeyPair()   P-256
         A->>A: ecdsaA = generateECDSAKeyPair()  P-256
         Note over A: Private keys stay in browser memory (never sent)
-        A->>S: socket.register(jwt, ecdhA.pub, ecdsaA.pub)
-        S->>S: users["alice"] = { ecdhA.pub, ecdsaA.pub, sid }
+        A->>S: POST /api/auth/challenge + /api/auth/complete
+        S-->>A: JWT + server_key_cert  (server signed ecdsaA.pub)
+        A->>S: socket.register(jwt, ecdhA.pub, ecdsaA.pub, server_key_cert)
+        S->>S: users["alice"] = { ecdhA.pub, ecdsaA.pub, server_key_cert, sid }
     end
 
     rect rgb(20, 30, 80)
-        Note over B,S: ── On Login: Bob registers his public keys ──
+        Note over B,S: ── On Login: Bob does the same ──
         B->>B: ecdhB  = generateECDHKeyPair()   P-256
         B->>B: ecdsaB = generateECDSAKeyPair()  P-256
-        B->>S: socket.register(jwt, ecdhB.pub, ecdsaB.pub)
-        S->>S: users["bob"] = { ecdhB.pub, ecdsaB.pub, sid }
+        B->>S: POST /api/auth/challenge + /api/auth/complete
+        S-->>B: JWT + server_key_cert_B
+        B->>S: socket.register(jwt, ecdhB.pub, ecdsaB.pub, server_key_cert_B)
+        S->>S: users["bob"] = { ecdhB.pub, ecdsaB.pub, server_key_cert_B, sid }
     end
 
     rect rgb(10, 50, 30)
-        Note over A,B: ── Key Derivation: Alice opens chat with Bob ──
-        A->>S: get_public_key("Bob")  [requires JWT scope: key:read]
-        S-->>A: { ecdhB.pub, ecdsaB.pub }
+        Note over A,B: ── Session Setup: Alice opens chat with Bob ──
+        A->>S: get_public_key("Bob")
+        S-->>A: { ecdhB.pub, ecdsaB.pub, bob_server_key_cert }
+        A->>S: GET /api/server/pubkey
+        S-->>A: { server_pubkey_jwk }
 
-        A->>A: shared_secret = ECDH(ecdhA.priv, ecdhB.pub)
-        A->>A: aes_key = HKDF-SHA256(shared_secret, 32 bytes)
-        Note over A: aes_key is the AES-256-GCM encryption key
+        A->>A: ① shared_secret = ECDH(ecdhA.priv, ecdhB.pub)
+        A->>A: ② aes_key = HKDF-SHA256(shared_secret, 32 bytes)
+        A->>A: ③ certOK = verifyServerKeyCert(serverPub, bob_server_key_cert, ecdsaB.pub)
+        Note over A: ✓ certOK=true → Server vouches for Bob's key (GAP2 fixed)
+        A->>A: ④ safetyNum = SHA-256(sort(aliceKey, bobKey)) → 12 digit groups
+        Note over A: ✓ Safety Number shown in UI — call Bob to compare (GAP3 fixed)
 
-        Note over B: When Bob opens chat with Alice...
-        B->>S: get_public_key("Alice")
-        S-->>B: { ecdhA.pub, ecdsaA.pub }
-
-        B->>B: shared_secret = ECDH(ecdhB.priv, ecdhA.pub)
-        B->>B: aes_key = HKDF-SHA256(shared_secret, 32 bytes)
-        Note over A,B: ✓ Alice and Bob hold IDENTICAL aes_key
-        Note over A,B: ✓ Key was NEVER transmitted — PFS achieved
+        Note over B: Bob does identical steps for Alice
+        Note over A,B: ✓ Both hold IDENTICAL aes_key — key NEVER transmitted
+        Note over A,B: ✓ Both show IDENTICAL safety number
     end
       </pre>
     </div>
@@ -938,8 +1132,8 @@ sequenceDiagram
         <p>Generates two real EC keypairs (alice, mallory). Signs with mallory's key. Calls <code>verify_ecdsa(alice_pub, mallory_sig, message)</code> → raises <code>InvalidSignature</code>. Then verifies alice's own sig still passes.</p>
       </div>
       <div class="kp">
-        <div class="label" style="color:var(--yellow)">Note on Key Registration</div>
-        <p>The current system registers keys over an unauthenticated channel (no PKI/CA). In production, key pinning or a Certificate Authority would be needed to fully prevent MITM at the registration step.</p>
+        <div class="label" style="color:var(--emerald)">Now Fully Addressed (GAP2 + GAP3)</div>
+        <p>Key registration is now authenticated: the server signs each ECDSA public key at login (mini-CA). Peers verify the cert via <code>/api/server/pubkey</code>. Safety Numbers provide a final out-of-band check — a MITM is detectable even if the server is compromised.</p>
       </div>
     </div>
   </section>
@@ -1087,12 +1281,17 @@ graph LR
     <div class="section-header">
       <div class="section-icon icon-auth">🛡️</div>
       <div>
-        <h2>All 8+ Defense Layers — At a Glance</h2>
-        <p>Every layer is active and enforced on every request. The defense-in-depth principle means an attacker must defeat multiple independent mechanisms.</p>
+        <h2>All 14 Defense Layers — At a Glance</h2>
+        <p>Every layer is active and enforced on every request. The defense-in-depth principle means an attacker must defeat multiple independent mechanisms. Layer ⓪ (TLS) is the transport foundation — all application-layer defenses run inside it. Layers ⑪–⑬ are the mutual authentication defenses.</p>
       </div>
     </div>
 
     <div class="defense-grid">
+      <div class="def-card" style="background:rgba(6,182,212,0.08);border-color:rgba(6,182,212,0.4);grid-column:1/-1">
+        <h4 style="color:#06b6d4">⓪ TLS 1.3 Transport Security — Foundation Layer (NEW)</h4>
+        <p>Nginx terminates HTTPS on port 8443. A Local CA signs the server certificate; the browser verifies it before sending any data — authenticating the server to the client. TLS 1.3 with ECDHE ensures Perfect Forward Secrecy at the transport layer. HSTS enforces HTTPS for 1 year after first visit. All application-layer defenses (①–⑬) run inside this encrypted, authenticated tunnel.</p>
+        <code>TLS handshake → server.crt verified against ca.crt → NET::ERR_CERT_AUTHORITY_INVALID if MITM</code>
+      </div>
       <div class="def-card">
         <h4>① AES-256-GCM Encryption</h4>
         <p>AEAD cipher — one operation gives both confidentiality and integrity. 16-byte auth tag detects any ciphertext modification.</p>
@@ -1143,6 +1342,21 @@ graph LR
         <p>Captures raw TCP packets on host interfaces. SYN/ACK ratio &gt; 3.0 → <code>dos_suspected=1</code> → InfluxDB → Grafana visual alert.</p>
         <code>ratio = syn_count / max(ack_count, 1) → if ≥ 3.0: alert</code>
       </div>
+      <div class="def-card" style="background:rgba(16,185,129,0.08);border-color:rgba(16,185,129,0.35)">
+        <h4>⑪ Challenge-Response Authentication (GAP1)</h4>
+        <p>Login requires proving possession of the ECDSA private key: server issues a 32-byte random challenge, client signs it. A stolen password alone cannot authenticate.</p>
+        <code>verify_ecdsa(clientPub, sig, challenge_bytes) → 401 if wrong</code>
+      </div>
+      <div class="def-card" style="background:rgba(16,185,129,0.08);border-color:rgba(16,185,129,0.35)">
+        <h4>⑫ Server-Signed Key Certificates (GAP2)</h4>
+        <p>Server signs each user's ECDSA public key at login (mini-CA). Peers fetch <code>/api/server/pubkey</code> and run <code>SubtleCrypto.verify()</code> to confirm the server vouches for the key. MITM key substitution is cryptographically detectable.</p>
+        <code>audit_key.sign(canonical_jwk) → server_key_cert → verify in browser</code>
+      </div>
+      <div class="def-card" style="background:rgba(16,185,129,0.08);border-color:rgba(16,185,129,0.35)">
+        <h4>⑬ Safety Numbers — Peer Key Fingerprint (GAP3)</h4>
+        <p>SHA-256 of both peers' ECDSA public keys (sorted for symmetry), formatted as 12 groups of 5 decimal digits — identical on both sides. Comparing out-of-band (phone call) detects MITM even if the server is compromised.</p>
+        <code>SHA-256(sort(aliceKey, bobKey)) → "12345 67890 01234 56789 …"</code>
+      </div>
     </div>
   </section>
 
@@ -1173,9 +1387,9 @@ graph LR
           <tr>
             <td><div class="letter" style="background:rgba(59,130,246,0.2);color:#3b82f6">S</div></td>
             <td><strong>Spoofing</strong><br><span style="font-size:10px;color:#94a3b8">Pretending to be someone else</span></td>
-            <td>Forged JWT · MITM Key Substitution</td>
-            <td>JWT HS256 signature verification · ECDSA bound to registered public key</td>
-            <td><code style="font-size:10px">InvalidTokenError · InvalidSignature</code></td>
+            <td>Forged JWT · MITM Key Substitution · Trudy acting as fake server</td>
+            <td>TLS cert verification (⓪) · JWT HS256 · ECDSA bound to registered key · Challenge-Response (⑪) · Server Key Cert (⑫) · Safety Numbers (⑬)</td>
+            <td><code style="font-size:10px">InvalidTokenError · InvalidSignature · certVerified=false</code></td>
           </tr>
           <tr>
             <td><div class="letter" style="background:rgba(239,68,68,0.2);color:#ef4444">T</div></td>
@@ -1194,8 +1408,8 @@ graph LR
           <tr>
             <td><div class="letter" style="background:rgba(139,92,246,0.2);color:#8b5cf6">I</div></td>
             <td><strong>Information Disclosure</strong><br><span style="font-size:10px;color:#94a3b8">Exposing private data</span></td>
-            <td>MITM Key Substitution (to read messages)</td>
-            <td>ECDH PFS (shared key never transmitted) · AES-256-GCM E2EE · Server never stores/decrypts</td>
+            <td>MITM Key Substitution (to read messages) · Network eavesdropping</td>
+            <td>TLS 1.3 transport encryption (⓪) · ECDH PFS (shared key never transmitted) · AES-256-GCM E2EE · Server never stores/decrypts</td>
             <td><code style="font-size:10px">Server only sees ciphertext blobs</code></td>
           </tr>
           <tr>
@@ -1221,10 +1435,10 @@ graph LR
         <pre class="mermaid">
 graph LR
     subgraph STRIDE["STRIDE Threat Model — Full Coverage"]
-        S["S — Spoofing\nJWT verification\nECDSA signatures"]
+        S["S — Spoofing\nTLS cert verification\nJWT verification · ECDSA sigs\nChallenge-Response\nServer Key Cert · Safety Nos"]
         T["T — Tampering\nAES-GCM auth tag\nECDSA envelope sig\nSHA-256 hash"]
         R["R — Repudiation\nHash-chained audit log\nECDSA non-repudiation"]
-        I["I — Info Disclosure\nECDH PFS\nAES-256-GCM E2EE"]
+        I["I — Info Disclosure\nTLS 1.3 transport encryption\nECDH PFS\nAES-256-GCM E2EE"]
         D["D — Denial of Service\nSliding-window rate limit\nScapy SYN/ACK monitor"]
         E["E — Elev of Privilege\nRate limit + bcrypt\nJWT scope enforcement"]
     end

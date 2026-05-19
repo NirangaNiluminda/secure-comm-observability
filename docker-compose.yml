@@ -7,10 +7,15 @@
 #  Wipe all data:      docker compose down -v
 #
 #  Services:
-#    frontend   →  http://localhost          (React chat + dashboard)
-#    backend    →  http://localhost:5000     (Flask + SocketIO API)
-#    grafana    →  http://localhost:3000     (DoS anomaly charts)
-#    influxdb   →  http://localhost:8086     (time-series metrics)
+#    frontend   →  https://localhost:8443    (React chat + dashboard — HTTPS/TLS)
+#               →  http://localhost:8080     (redirects to HTTPS automatically)
+#    backend    →  http://localhost:5001     (Flask + SocketIO API — internal only)
+#    grafana    →  http://localhost:3001     (DoS anomaly charts)
+#    influxdb   →  http://localhost:8087     (time-series metrics)
+#
+#  TLS certificates:
+#    Generate:  bash scripts/generate-certs.sh
+#    Trust CA:  import certs/ca.crt into your browser to avoid the warning
 #
 #  Optional monitor (Scapy packet sniffer — Linux only):
 #    docker compose --profile monitor up --build
@@ -26,7 +31,7 @@ services:
     container_name: securechat_backend
     restart: unless-stopped
     ports:
-      - "5000:5000"     # exposed to host so Scapy sniffer can capture port 5000 traffic
+      - "5001:5000"     # host:5001 → container:5000  (Scapy filter: tcp port 5001)
     environment:
       - USE_SSL=false                                    # nginx handles TLS termination
       - JWT_SECRET=change-me-before-production-use
@@ -53,7 +58,7 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── React + Nginx frontend ────────────────────────────────────
+  # ── React + Nginx frontend (TLS) ─────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -61,7 +66,10 @@ services:
     container_name: securechat_frontend
     restart: unless-stopped
     ports:
-      - "80:80"          # open http://localhost in your browser
+      - "8443:443"       # HTTPS — open https://localhost:8443 in your browser
+      - "8080:80"        # HTTP  — redirects to https://localhost:8443
+    volumes:
+      - ./certs:/etc/nginx/certs:ro   # TLS cert + key (read-only inside container)
     depends_on:
       backend:
         condition: service_healthy
@@ -74,7 +82,7 @@ services:
     container_name: securechat_influxdb
     restart: unless-stopped
     ports:
-      - "8086:8086"
+      - "8087:8086"      # host:8087 → container:8086
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
@@ -93,7 +101,7 @@ services:
     container_name: securechat_grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"      # open http://localhost:3000  (admin / admin)
+      - "3001:3000"      # open http://localhost:3001  (admin / admin)
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
@@ -119,11 +127,11 @@ services:
       - NET_ADMIN
       - NET_RAW
     environment:
-      - INFLUX_URL=http://localhost:8086
+      - INFLUX_URL=http://localhost:8087   # host port (monitor uses host network)
       - INFLUX_TOKEN=my-super-secret-auth-token
       - INFLUX_ORG=securechat
       - INFLUX_BUCKET=network_metrics
-      - CAPTURE_FILTER=tcp port 5000
+      - CAPTURE_FILTER=tcp port 5001       # match the backend host port
       - SYN_ACK_WINDOW=200
       - DOS_RATIO_THRESHOLD=3.0
     depends_on:
